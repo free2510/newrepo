@@ -1,0 +1,33 @@
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Jupyter notebooks cache
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.local
+*.env.*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Python virtual environments
+venv/
+.venv/
+```
