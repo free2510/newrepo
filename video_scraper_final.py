@@ -35,7 +35,7 @@ CATEGORY_URL = "https://larozaa.yachts/category.php?cat=ramadan-2026"
 DOODSTREAM_API_KEY = "566462d6434dlvqu6fmesc"
 GOOGLE_SHEET_ID = "1Bpvo9v6san0VsD6Y1vW26UlxYWpWDqWFVbFga-Cczjg"
 CATEGORY_NAME = "رمضان 2026 - مسلسلات"
-TEMP_FOLDER = "/content/temp_videos"
+TEMP_FOLDER = "/content/temp_videos"  # Local temp folder (NOT Google Drive)
 PROCESSED_FILE = "/content/processed_videos.json"
 
 # ==================== INITIALIZATION ====================
@@ -51,14 +51,16 @@ subprocess.run(["pip", "install", "-q", "requests", "beautifulsoup4", "tqdm", "d
 # Initialize DoodStream
 dood = DoodStream(DOODSTREAM_API_KEY)
 
-# Setup Google Drive
-print("\n🔐 Mounting Google Drive...")
+# Setup Google Drive (only needed for Sheets auth, not for video storage)
+print("\n🔐 Authenticating with Google...")
 try:
     drive.mount("/content/drive", force_remount=False)
 except Exception as e:
     print(f"Drive already mounted: {e}")
 
+# Create local temp folder (NOT in Google Drive)
 os.makedirs(TEMP_FOLDER, exist_ok=True)
+print(f"📁 Local temp folder ready: {TEMP_FOLDER}")
 
 # Load processed videos (for resume capability)
 processed_videos = set()
@@ -92,6 +94,7 @@ try:
             
     service = build('sheets', 'v4', credentials=creds)
     sheet = service.spreadsheets()
+    # Note: drive_service is only used for Google Sheets auth, not for video storage
     drive_service = build('drive', 'v3', credentials=creds)
     print("✅ Google Sheets + Drive connected")
 except Exception as e:
@@ -413,15 +416,20 @@ def get_or_create_folder_structure(series_name):
     
     return category_folder_id, series_folder_id
 
-def upload_to_doodstream(file_path, series_name, video_title, drive_file_id=None):
-    """Upload video to DoodStream in correct folder, then delete from Google Drive"""
+def upload_to_doodstream(file_path, series_name, video_title):
+    """Upload video to DoodStream in correct folder"""
     
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
+    target_folder_id = series_folder_id if series_folder_id else cat_folder_id
     
     try:
         print(f"⬆️ Uploading to DoodStream...")
         
-        # Upload to root first
+        # If we have a target folder, upload directly to it using remote upload approach
+        # First, we need to get a temporary accessible URL for the local file
+        # Since we can't directly upload local files to folders with the current API,
+        # we'll upload to root first, then move
+        
         result = dood.local_upload(file_path)
         
         if not result:
@@ -430,34 +438,53 @@ def upload_to_doodstream(file_path, series_name, video_title, drive_file_id=None
         
         # Handle different response formats
         file_code = None
+        video_id = None
+        
         if isinstance(result, list) and len(result) > 0:
-            file_code = result[0].get('filecode') if isinstance(result[0], dict) else None
+            item = result[0]
+            if isinstance(item, dict):
+                file_code = item.get('filecode') or item.get('id')
+                video_id = item.get('id') or item.get('filecode')
         elif isinstance(result, dict):
-            file_code = result.get('result', {}).get('filecode') or result.get('filecode')
+            # Check if it's nested in 'result' key
+            if 'result' in result and isinstance(result['result'], dict):
+                file_code = result['result'].get('filecode')
+                video_id = result['result'].get('id')
+            else:
+                file_code = result.get('filecode')
+                video_id = result.get('id')
         
         if not file_code:
-            print(f"❌ Could not get file code from upload. Response: {result}")
+            print(f"❌ Could not get file code from upload. Response type: {type(result)}, Response: {result}")
             return None
         
-        print(f"✅ Uploaded! File code: {file_code}")
+        print(f"✅ Uploaded to root! File code: {file_code}")
         
         # Move to series folder if available
-        if series_folder_id:
+        if target_folder_id:
             try:
-                # Copy to folder (DoodStream API uses copy then delete original)
-                move_result = dood.copy_video(file_code, series_folder_id)
+                print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
+                # Use rename/move API if available, otherwise copy
+                move_result = dood.copy_video(file_code, target_folder_id)
                 if move_result:
-                    print(f"📁 Moved to series folder: {series_name}")
+                    print(f"📁 Moved/copied to series folder: {series_name}")
                     # Delete original from root
-                    dood.delete_file([file_code])
-                    # Get new file code from folder
-                    folder_files = dood.list_files(folder_id=series_folder_id)
+                    try:
+                        dood.delete_file([file_code])
+                    except:
+                        pass
+                    # Get the file code from the folder
+                    time.sleep(2)
+                    folder_files = dood.list_files(folder_id=target_folder_id)
                     for item in folder_files:
-                        if item.get('name') and video_title[:20] in item.get('name', ''):
-                            file_code = item.get('id') or item.get('filecode')
+                        item_name = item.get('name', '')
+                        if video_title[:20] in item_name or file_code in str(item.get('id', '')):
+                            file_code = item.get('id') or item.get('filecode') or file_code
                             break
+                    print(f"✅ File now in folder: {series_name}")
             except Exception as e:
                 print(f"⚠️ Could not move to folder: {e}")
+                # Continue anyway, file is in root
         
         # Get share links
         try:
@@ -476,6 +503,8 @@ def upload_to_doodstream(file_path, series_name, video_title, drive_file_id=None
         
     except Exception as e:
         print(f"❌ Upload error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def delete_from_google_drive(drive_file_id):
@@ -619,27 +648,19 @@ def process_video(video_info, index, total):
         update_sheet_realtime(video_data, status="❌ No working server")
         return False
     
-    # Step 3: Download video to Google Drive (temp)
+    # Step 3: Download video to local temp folder (NOT Google Drive)
     safe_filename = f"{video_info['video_id']}_{video_data['series_name']}.mp4"
     safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in (' ', '.', '_')).strip()
     safe_filename = safe_filename.replace(' ', '_')[:100] + ".mp4"
     
-    print(f"   📥 Downloading video...")
+    print(f"   📥 Downloading video to temp folder...")
     downloaded_path = download_video(video_url, safe_filename)
     
     if not downloaded_path:
         update_sheet_realtime(video_data, status="❌ Download failed")
         return False
     
-    # Upload to Google Drive first (as temp storage)
-    print(f"   ☁️ Uploading to Google Drive (temp)...")
-    drive_file_id = upload_to_google_drive(downloaded_path, video_info['title'], video_data['series_name'])
-    
-    if not drive_file_id:
-        update_sheet_realtime(video_data, status="❌ Drive upload failed")
-        return False
-    
-    # Step 4: Upload to DoodStream
+    # Step 4: Upload to DoodStream (directly from local temp file)
     print(f"   ⬆️ Uploading to DoodStream...")
     dood_result = upload_to_doodstream(
         downloaded_path, 
@@ -647,7 +668,7 @@ def process_video(video_info, index, total):
         video_info['title']
     )
     
-    # Cleanup local temp file
+    # Cleanup local temp file AFTER DoodStream upload
     try:
         if os.path.exists(downloaded_path):
             os.remove(downloaded_path)
@@ -658,9 +679,6 @@ def process_video(video_info, index, total):
     if not dood_result:
         update_sheet_realtime(video_data, status="❌ DoodStream upload failed")
         return False
-    
-    # ✅ CRITICAL: Delete from Google Drive AFTER successful DoodStream upload
-    delete_from_google_drive(drive_file_id)
     
     video_data['dood_watch'] = dood_result['watch_link']
     video_data['dood_download'] = dood_result['download_link']
