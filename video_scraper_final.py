@@ -430,15 +430,22 @@ def get_or_create_folder_structure(series_name):
     return category_folder_id, series_folder_id
 
 def upload_to_doodstream(file_path, series_name, video_title):
-    """Upload video to DoodStream in correct folder"""
+    """Upload video to DoodStream in correct folder structure: Category > Series > Video"""
     
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
     target_folder_id = series_folder_id if series_folder_id else cat_folder_id
     
+    if not target_folder_id:
+        print("❌ No target folder available, uploading to root")
+    
     try:
         print(f"⬆️ Uploading to DoodStream...")
         
-        # Step 1: Upload to root first
+        # Clean the title first: remove .mp4 extension and extra spaces
+        clean_title = video_title.replace('.mp4', '').strip()
+        clean_title = ' '.join(clean_title.split())
+        
+        # Step 1: Upload to root (library doesn't support folder upload directly)
         result = dood.local_upload(file_path)
         
         if not result:
@@ -468,11 +475,7 @@ def upload_to_doodstream(file_path, series_name, video_title):
         
         print(f"✅ Uploaded to root! File code: {file_code}")
         
-        # Step 3: Rename file to proper title BEFORE moving
-        # Clean the title: remove .mp4 extension and extra spaces
-        clean_title = video_title.replace('.mp4', '').strip()
-        # Replace multiple spaces with single space
-        clean_title = ' '.join(clean_title.split())
+        # Step 3: Rename file to proper title
         try:
             rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={clean_title}"
             rename_resp = requests.get(rename_url, timeout=10).json()
@@ -483,54 +486,47 @@ def upload_to_doodstream(file_path, series_name, video_title):
         except Exception as e:
             print(f"⚠️ Could not rename file: {e}")
         
-        # Step 4: Move to series folder
+        # Step 4: Move to series folder using API (copy to folder + delete from root)
         if target_folder_id:
             try:
                 print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
                 
-                # Copy video to folder
-                move_result = dood.copy_video(file_code, target_folder_id)
+                # Use API directly to copy file to folder
+                copy_url = f"https://doodapi.com/api/file/clone?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
+                copy_resp = requests.get(copy_url, timeout=15).json()
                 
-                if move_result and move_result.get('msg') == 'OK':
+                if copy_resp.get('msg') == 'OK':
+                    print(f"✅ Copied to folder successfully")
+                    
                     # Wait for copy to complete
-                    time.sleep(3)
+                    time.sleep(2)
                     
-                    # List files in folder to find the copied file
-                    folder_files = dood.list_files(folder_id=target_folder_id)
-                    if not isinstance(folder_files, list):
-                        folder_files = []
-                    
-                    new_file_code = None
-                    for item in folder_files:
-                        item_name = item.get('name', '')
-                        # Match by title or filecode
-                        if clean_title.replace('_', ' ') in item_name or file_code == item.get('id'):
-                            new_file_code = item.get('id') or item.get('filecode')
-                            break
-                    
-                    if new_file_code:
-                        # Delete original from root
-                        try:
-                            delete_result = dood.delete_file([file_code])
-                            if delete_result and delete_result.get('msg') == 'OK':
-                                print(f"✅ Deleted original from root")
-                        except Exception as e:
-                            print(f"⚠️ Could not delete original: {e}")
-                        
-                        file_code = new_file_code
-                        print(f"✅ File moved to series folder: {series_name}")
-                    else:
-                        print(f"⚠️ Could not find file in folder after copy")
+                    # Delete original from root
+                    try:
+                        delete_result = dood.delete_file([file_code])
+                        if delete_result and delete_result.get('msg') == 'OK':
+                            print(f"✅ Deleted original from root")
+                    except Exception as e:
+                        print(f"⚠️ Could not delete original: {e}")
                 else:
-                    print(f"⚠️ Copy operation failed: {move_result}")
-                    
+                    print(f"⚠️ Copy to folder failed: {copy_resp}")
             except Exception as e:
                 print(f"⚠️ Error moving to folder: {e}")
-                import traceback
-                traceback.print_exc()
         
-        # Return the final file code
-        return file_code
+        # Build final URLs
+        watch_url = f"https://dsvplay.com/e/{file_code}"
+        download_url = f"https://dsvplay.com/d/{file_code}"
+        
+        print(f"✅ Upload complete!")
+        print(f"   👁️ Watch: {watch_url}")
+        print(f"   ⬇️ Download: {download_url}")
+        
+        return {
+            'filecode': file_code,
+            'watch_url': watch_url,
+            'download_url': download_url,
+            'title': clean_title
+        }
         
     except Exception as e:
         print(f"❌ Upload error: {e}")
