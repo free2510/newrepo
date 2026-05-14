@@ -18,6 +18,35 @@ Welcome to the complete documentation for the **Video Scraper & Uploader** proje
 - **Folder Structure**: See [WORKFLOW.md](WORKFLOW.md) → DoodStream Organization
 - **Common Errors**: See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
+## 🎯 Latest Updates (v2.0)
+
+### ✅ Folder Structure Fixed
+Videos now upload to the correct folder structure in DoodStream:
+```
+📁 Category (e.g., رمضان 2026 - مسلسلات)
+  └── 📁 Series (e.g., مسلسل حكاية نرجس)
+      └── 🎬 Video (e.g., مسلسل حكاية نرجس الحلقة 7 السابعة)
+```
+
+### 🔧 Key Improvements
+- Uses DoodStream API `/api/file/clone?fld_id=` endpoint to move files to folders
+- Renames files with clean Arabic titles before moving
+- Deletes original from root after successful copy
+- Proper error handling with 10-15 second timeouts
+- No more duplicate rows in Google Sheets
+
+### 📊 Workflow
+1. Download video to local temp folder (`/content/temp_videos`)
+2. Upload to DoodStream root
+3. Rename with Arabic title
+4. Copy to series folder using API
+5. Delete from root
+6. Update Google Sheets (single row, final status)
+7. Delete local temp file
+
+---
+*Last Updated: May 2026 | Version: 2.0*
+
 ## 🚀 Quick Start
 
 1. **Setup**: Follow [SETUP_GUIDE.md](SETUP_GUIDE.md)
