@@ -38,6 +38,9 @@ CATEGORY_NAME = "رمضان 2026 - مسلسلات"
 TEMP_FOLDER = "/content/temp_videos"  # Local temp folder (NOT Google Drive)
 PROCESSED_FILE = "/content/processed_videos.json"
 
+# Track which videos we've already created rows for in this session
+session_processed_rows = set()
+
 # ==================== INITIALIZATION ====================
 print("=" * 60)
 print("🚀 Video Processing Pipeline - REAL-TIME UPDATES")
@@ -360,6 +363,9 @@ def get_or_create_folder_structure(series_name):
     category_folder_id = None
     try:
         files = dood.list_files()
+        if not isinstance(files, list):
+            files = []
+        
         for item in files:
             if item.get('name') == CATEGORY_NAME and item.get('is_folder'):
                 category_folder_id = item.get('id')
@@ -369,11 +375,13 @@ def get_or_create_folder_structure(series_name):
         if not category_folder_id:
             print(f"📁 Creating category folder: {CATEGORY_NAME}")
             result = dood.create_folder(name=CATEGORY_NAME)
-            if result and isinstance(result, dict):
-                category_folder_id = result.get('id') or result.get('foldercode')
+            if result and isinstance(result, dict) and result.get('msg') == 'OK':
+                category_folder_id = result.get('result', {}).get('foldercode') or result.get('result', {}).get('id')
                 # Refresh file list
                 time.sleep(1)
                 files = dood.list_files()
+                if not isinstance(files, list):
+                    files = []
                 for item in files:
                     if item.get('name') == CATEGORY_NAME:
                         category_folder_id = item.get('id')
@@ -393,6 +401,9 @@ def get_or_create_folder_structure(series_name):
     if category_folder_id:
         try:
             series_files = dood.list_files(folder_id=category_folder_id)
+            if not isinstance(series_files, list):
+                series_files = []
+            
             for item in series_files:
                 if item.get('name') == series_name and item.get('is_folder'):
                     series_folder_id = item.get('id')
@@ -402,11 +413,13 @@ def get_or_create_folder_structure(series_name):
             if not series_folder_id:
                 print(f"📁 Creating series folder: {series_name}")
                 result = dood.create_folder(name=series_name, parent_id=category_folder_id)
-                if result and isinstance(result, dict):
-                    series_folder_id = result.get('id') or result.get('foldercode')
+                if result and isinstance(result, dict) and result.get('msg') == 'OK':
+                    series_folder_id = result.get('result', {}).get('foldercode') or result.get('result', {}).get('id')
                     time.sleep(1)
                     # Verify creation
                     series_files = dood.list_files(folder_id=category_folder_id)
+                    if not isinstance(series_files, list):
+                        series_files = []
                     for item in series_files:
                         if item.get('name') == series_name:
                             series_folder_id = item.get('id')
@@ -417,7 +430,7 @@ def get_or_create_folder_structure(series_name):
     return category_folder_id, series_folder_id
 
 def upload_to_doodstream(file_path, series_name, video_title):
-    """Upload video to DoodStream in correct folder"""
+    """Upload video to DoodStream in correct folder using remote upload"""
     
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
     target_folder_id = series_folder_id if series_folder_id else cat_folder_id
@@ -425,10 +438,10 @@ def upload_to_doodstream(file_path, series_name, video_title):
     try:
         print(f"⬆️ Uploading to DoodStream...")
         
-        # If we have a target folder, upload directly to it using remote upload approach
-        # First, we need to get a temporary accessible URL for the local file
-        # Since we can't directly upload local files to folders with the current API,
-        # we'll upload to root first, then move
+        # For local files, we need to first get an accessible URL
+        # Since we can't directly expose local files, we'll use a workaround:
+        # 1. Upload to root first using local_upload
+        # 2. Then move to the correct folder
         
         result = dood.local_upload(file_path)
         
@@ -447,9 +460,13 @@ def upload_to_doodstream(file_path, series_name, video_title):
                 video_id = item.get('id') or item.get('filecode')
         elif isinstance(result, dict):
             # Check if it's nested in 'result' key
-            if 'result' in result and isinstance(result['result'], dict):
-                file_code = result['result'].get('filecode')
-                video_id = result['result'].get('id')
+            if 'result' in result and isinstance(result['result'], (dict, list)):
+                res_data = result['result']
+                if isinstance(res_data, list) and len(res_data) > 0:
+                    res_data = res_data[0]
+                if isinstance(res_data, dict):
+                    file_code = res_data.get('filecode')
+                    video_id = res_data.get('id') or res_data.get('filecode')
             else:
                 file_code = result.get('filecode')
                 video_id = result.get('id')
@@ -460,30 +477,52 @@ def upload_to_doodstream(file_path, series_name, video_title):
         
         print(f"✅ Uploaded to root! File code: {file_code}")
         
+        # Rename the file to have proper title
+        try:
+            rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={video_title}"
+            rename_resp = requests.get(rename_url).json()
+            if rename_resp.get('msg') == 'OK':
+                print(f"✅ Renamed file to: {video_title}")
+        except Exception as e:
+            print(f"⚠️ Could not rename file: {e}")
+        
         # Move to series folder if available
         if target_folder_id:
             try:
                 print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
-                # Use rename/move API if available, otherwise copy
+                # Use clone to copy to folder, then delete original
                 move_result = dood.copy_video(file_code, target_folder_id)
-                if move_result:
-                    print(f"📁 Moved/copied to series folder: {series_name}")
-                    # Delete original from root
-                    try:
-                        dood.delete_file([file_code])
-                    except:
-                        pass
-                    # Get the file code from the folder
+                
+                if move_result and move_result.get('msg') == 'OK':
+                    # Get the new file code from the folder
                     time.sleep(2)
                     folder_files = dood.list_files(folder_id=target_folder_id)
+                    new_file_code = None
+                    
                     for item in folder_files:
                         item_name = item.get('name', '')
-                        if video_title[:20] in item_name or file_code in str(item.get('id', '')):
-                            file_code = item.get('id') or item.get('filecode') or file_code
+                        # Match by video title or recent file
+                        if video_title[:20] in item_name or item.get('added') == 'just now':
+                            new_file_code = item.get('id') or item.get('filecode')
                             break
-                    print(f"✅ File now in folder: {series_name}")
+                    
+                    if new_file_code:
+                        file_code = new_file_code
+                        # Delete original from root
+                        try:
+                            dood.delete_file([file_code.split('_')[0] if '_' in file_code else file_code])
+                        except:
+                            pass
+                        print(f"✅ File moved to series folder: {series_name}")
+                    else:
+                        print(f"⚠️ Could not find file in folder, but upload successful")
+                else:
+                    print(f"⚠️ Move operation response: {move_result}")
+                    
             except Exception as e:
                 print(f"⚠️ Could not move to folder: {e}")
+                import traceback
+                traceback.print_exc()
                 # Continue anyway, file is in root
         
         # Get share links
@@ -532,9 +571,39 @@ def delete_from_google_drive(drive_file_id):
         return False
 
 # ==================== GOOGLE SHEETS UPDATE ====================
-def update_sheet_realtime(video_data, status="Processing"):
-    """Update Google Sheet IMMEDIATELY after each video"""
+def get_existing_video_row(video_id):
+    """Check if video already exists in sheet and return row number"""
     global sheet, service
+    
+    try:
+        if not service:
+            init_sheet()
+        
+        if not service:
+            return None
+        
+        # Get all data from sheet
+        result = sheet.values().get(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range='Sheet1!A:I'
+        ).execute()
+        
+        values = result.get('values', [])
+        
+        # Skip header row (index 0), start from row 2 (index 1)
+        for idx, row in enumerate(values[1:], start=2):
+            if len(row) >= 3 and row[2] == video_id:  # Column C is Video ID
+                return idx
+        
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Error checking existing row: {e}")
+        return None
+
+def update_sheet_realtime(video_data, status="Processing", is_final=False):
+    """Update Google Sheet IMMEDIATELY after each video - updates existing row or creates new one"""
+    global sheet, service, session_processed_rows
     
     max_retries = 3
     for attempt in range(max_retries):
@@ -547,6 +616,10 @@ def update_sheet_realtime(video_data, status="Processing"):
                 return False
             
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            video_id = video_data.get('video_id', '')
+            
+            # Check if this video already has a row in the sheet
+            existing_row = get_existing_video_row(video_id)
             
             row_data = [
                 timestamp,
@@ -560,16 +633,31 @@ def update_sheet_realtime(video_data, status="Processing"):
                 status
             ]
             
-            # Append new row
-            sheet.values().append(
-                spreadsheetId=GOOGLE_SHEET_ID,
-                range='Sheet1!A:I',
-                valueInputOption='RAW',
-                insertDataOption='INSERT_ROWS',
-                body={'values': [row_data]}
-            ).execute()
+            if existing_row:
+                # Update existing row instead of creating duplicate
+                range_name = f'Sheet1!A{existing_row}:I{existing_row}'
+                sheet.values().update(
+                    spreadsheetId=GOOGLE_SHEET_ID,
+                    range=range_name,
+                    valueInputOption='RAW',
+                    body={'values': [row_data]}
+                ).execute()
+                print(f"✅ REAL-TIME UPDATE: Row {existing_row} updated in Google Sheet")
+            else:
+                # Only add new row for initial "Starting" status or final status
+                # Don't create duplicate rows for intermediate statuses
+                if status != "⏳ Starting" and status != "✅ Success" and not status.startswith("❌"):
+                    return True  # Skip intermediate status updates
+                
+                sheet.values().append(
+                    spreadsheetId=GOOGLE_SHEET_ID,
+                    range='Sheet1!A:I',
+                    valueInputOption='RAW',
+                    insertDataOption='INSERT_ROWS',
+                    body={'values': [row_data]}
+                ).execute()
+                print(f"✅ REAL-TIME UPDATE: New row added to Google Sheet")
             
-            print(f"✅ REAL-TIME UPDATE: Row added to Google Sheet")
             return True
             
         except Exception as e:
