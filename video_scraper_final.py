@@ -469,7 +469,10 @@ def upload_to_doodstream(file_path, series_name, video_title):
         print(f"✅ Uploaded to root! File code: {file_code}")
         
         # Step 3: Rename file to proper title BEFORE moving
-        clean_title = video_title.replace('.mp4', '').replace(' ', '_')
+        # Clean the title: remove .mp4 extension and extra spaces
+        clean_title = video_title.replace('.mp4', '').strip()
+        # Replace multiple spaces with single space
+        clean_title = ' '.join(clean_title.split())
         try:
             rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={clean_title}"
             rename_resp = requests.get(rename_url, timeout=10).json()
