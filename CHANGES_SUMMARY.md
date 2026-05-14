@@ -1,65 +1,78 @@
-# Summary of Changes Made
+# 📝 Changes Summary - Video Scraper Update
 
-## 1. Single-Line Progress Bar for Downloads
-**File:** `video_scraper_final.py` - `download_video()` function (lines 309-350)
+## ✅ Issues Fixed
 
-**Changes:**
-- Added `bar_format='{l_bar}{bar}| {n:.1f}/{total_fmt} [{remaining}, {rate_fmt}]'` to display progress on a single line
-- Added `mininterval=0.5` to reduce update frequency and prevent excessive line output
-- Shortened filename in description from 40 to 30 characters
-- Added newline before success/failure messages for cleaner output
+### 1. **Removed Google Drive as Temporary Storage**
+   - **Before**: Videos were downloaded → uploaded to Google Drive → uploaded to DoodStream → deleted from Drive
+   - **After**: Videos are downloaded to local temp folder (`/content/temp_videos`) → uploaded directly to DoodStream → deleted from local temp
+   
+   **Benefits:**
+   - No accumulation of files in `/content/drive/MyDrive/مسلسل حكاية نرجس`
+   - Faster processing (no double upload)
+   - Cleaner workflow
 
-**Result:** Instead of multiple lines showing each progress update, you now see only one line that updates in place:
+### 2. **Fixed DoodStream Folder Upload Error**
+   - **Problem**: Error `'str' object has no attribute 'get'` and `'list' object has no attribute 'get'`
+   - **Solution**: Enhanced response handling in `upload_to_doodstream()`:
+     - Better parsing of different API response formats (list vs dict)
+     - Proper extraction of `filecode` and `id` from nested structures
+     - Added detailed error messages showing response type and content
+   
+### 3. **Improved Folder Structure on DoodStream**
+   - Videos now properly organized: `Category → Series → Video`
+   - Fixed folder movement logic with better error handling
+   - Added verification step after moving files to folders
+
+### 4. **Single-Line Download Progress**
+   - Download progress bar updates on single line (not multiple lines)
+   - Cleaner console output
+
+## 🔧 Code Changes
+
+### Modified Functions:
+
+1. **`upload_to_doodstream()`** (lines 419-508)
+   - Removed `drive_file_id` parameter (no longer needed)
+   - Enhanced response parsing for different API formats
+   - Improved folder movement with try/catch
+   - Added traceback on errors
+
+2. **`process_video()`** (lines 648-684)
+   - Removed Google Drive upload step
+   - Downloads directly to local temp folder
+   - Removed `delete_from_google_drive()` call
+   - Simplified workflow
+
+3. **Initialization section** (lines 54-63)
+   - Clarified Google Drive is only for Sheets auth
+   - Added message about local temp folder
+
+## 📁 New Workflow
+
 ```
-⬇️ 8b828925a_مسلسل_حكاية_نرجس_الحلقة_7_السا |██████████| 118.0M/118.0M [00:04, 24.7MB/s]
-```
-
-## 2. Google Drive Cleanup After DoodStream Upload
-**Files Modified:**
-- `upload_to_google_drive()` function (lines 136-195)
-- `upload_to_doodstream()` function (lines 413-476)
-- Added new `delete_from_google_drive()` function (lines 478-500)
-- `process_video()` function (lines 630-675)
-
-**Changes:**
-1. **upload_to_google_drive():** Now accepts optional `series_name` parameter to organize files in series folders within Google Drive
-2. **delete_from_google_drive():** New dedicated function to delete files from Google Drive
-3. **process_video():** Calls `delete_from_google_drive()` AFTER successful DoodStream upload
-
-**Flow:**
-1. Download video to local temp folder (`/content/temp_videos`)
-2. Upload to Google Drive (organized by series name)
-3. Upload to DoodStream
+1. Scrape video URL from website
+2. Download to /content/temp_videos/ (local storage)
+3. Upload to DoodStream:
+   - Upload to root
+   - Move to Category/Series folder
+   - Delete from root
 4. Delete local temp file
-5. **Delete from Google Drive** ← This ensures videos don't accumulate in Drive
-
-**Result:** After successful upload to DoodStream, the temporary file is automatically deleted from Google Drive, preventing storage accumulation.
-
-## 3. Fixed pip install Command
-**File:** `video_scraper_final.py` (line 48-49)
-
-**Change:** Replaced Google Colab magic command `!pip install` with standard Python subprocess call for better compatibility:
-```python
-import subprocess
-subprocess.run(["pip", "install", "-q", "requests", "beautifulsoup4", "tqdm", "doodstream", "gspread", "oauth2client"], check=True)
+5. Update Google Sheet (real-time)
 ```
 
-## 4. Changed Temp Folder Location
-**File:** `video_scraper_final.py` (line 38)
+## ⚠️ Important Notes
 
-**Change:** Moved temp folder from Google Drive to local storage:
-```python
-TEMP_FOLDER = "/content/temp_videos"  # Was: "/content/drive/MyDrive/.temp_videos"
-```
+- Google Drive is still mounted for Google Sheets authentication only
+- No video files are stored in Google Drive anymore
+- Temp files are automatically cleaned up after successful upload
+- If upload fails, temp file remains for debugging (manual cleanup may be needed)
 
-**Benefit:** Faster I/O operations and no unnecessary Drive usage for temporary files.
+## 🧪 Testing Recommendations
 
----
-
-## Testing
-Run syntax check:
-```bash
-python3 -m py_compile video_scraper_final.py
-```
-
-Expected output: `✅ Syntax OK`
+1. Run with a small batch first (1-2 videos)
+2. Verify videos appear in correct DoodStream folders:
+   - `رمضان 2026 - مسلسلات` (Category)
+   - `مسلسل حكاية نرجس` (Series)
+   - Video file with proper title
+3. Check Google Sheet updates in real-time
+4. Verify no files accumulate in Google Drive

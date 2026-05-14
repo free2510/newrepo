@@ -1,31 +1,45 @@
-```
-# Python
-__pycache__/
+```gitignore
+# Compiled and binary files
 *.pyc
+__pycache__/
 *.pyo
 *.pyd
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
+*.so
+*.egg-info/
 
 # Dependencies
 .venv/
 venv/
-node_modules/
+env/
+.env
+.env.local
+*.env.*
 
-# Build artifacts
-dist/
-build/
-target/
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.cache
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE specific
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 ```
+
+Wait, let me reconsider. The changes only include CHANGES_SUMMARY.md and video_scraper_final.py, which are both source/config files (.md and .py). There are no build artifacts, dependencies, or temporary files in the change list.
+
+(empty)
