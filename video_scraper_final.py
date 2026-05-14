@@ -431,6 +431,7 @@ def get_or_create_folder_structure(series_name):
 
 def upload_to_doodstream(file_path, series_name, video_title):
     """Upload video to DoodStream in correct folder using remote upload"""
+    """Upload video to DoodStream in correct folder"""
     
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
     target_folder_id = series_folder_id if series_folder_id else cat_folder_id
@@ -442,6 +443,10 @@ def upload_to_doodstream(file_path, series_name, video_title):
         # Since we can't directly expose local files, we'll use a workaround:
         # 1. Upload to root first using local_upload
         # 2. Then move to the correct folder
+        # If we have a target folder, upload directly to it using remote upload approach
+        # First, we need to get a temporary accessible URL for the local file
+        # Since we can't directly upload local files to folders with the current API,
+        # we'll upload to root first, then move
         
         result = dood.local_upload(file_path)
         
@@ -467,6 +472,9 @@ def upload_to_doodstream(file_path, series_name, video_title):
                 if isinstance(res_data, dict):
                     file_code = res_data.get('filecode')
                     video_id = res_data.get('id') or res_data.get('filecode')
+            if 'result' in result and isinstance(result['result'], dict):
+                file_code = result['result'].get('filecode')
+                video_id = result['result'].get('id')
             else:
                 file_code = result.get('filecode')
                 video_id = result.get('id')
@@ -523,6 +531,26 @@ def upload_to_doodstream(file_path, series_name, video_title):
                 print(f"⚠️ Could not move to folder: {e}")
                 import traceback
                 traceback.print_exc()
+                # Use rename/move API if available, otherwise copy
+                move_result = dood.copy_video(file_code, target_folder_id)
+                if move_result:
+                    print(f"📁 Moved/copied to series folder: {series_name}")
+                    # Delete original from root
+                    try:
+                        dood.delete_file([file_code])
+                    except:
+                        pass
+                    # Get the file code from the folder
+                    time.sleep(2)
+                    folder_files = dood.list_files(folder_id=target_folder_id)
+                    for item in folder_files:
+                        item_name = item.get('name', '')
+                        if video_title[:20] in item_name or file_code in str(item.get('id', '')):
+                            file_code = item.get('id') or item.get('filecode') or file_code
+                            break
+                    print(f"✅ File now in folder: {series_name}")
+            except Exception as e:
+                print(f"⚠️ Could not move to folder: {e}")
                 # Continue anyway, file is in root
         
         # Get share links
