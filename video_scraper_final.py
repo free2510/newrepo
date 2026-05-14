@@ -430,7 +430,6 @@ def get_or_create_folder_structure(series_name):
     return category_folder_id, series_folder_id
 
 def upload_to_doodstream(file_path, series_name, video_title):
-    """Upload video to DoodStream in correct folder using remote upload"""
     """Upload video to DoodStream in correct folder"""
     
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
@@ -439,140 +438,120 @@ def upload_to_doodstream(file_path, series_name, video_title):
     try:
         print(f"⬆️ Uploading to DoodStream...")
         
-        # For local files, we need to first get an accessible URL
-        # Since we can't directly expose local files, we'll use a workaround:
-        # 1. Upload to root first using local_upload
-        # 2. Then move to the correct folder
-        # If we have a target folder, upload directly to it using remote upload approach
-        # First, we need to get a temporary accessible URL for the local file
-        # Since we can't directly upload local files to folders with the current API,
-        # we'll upload to root first, then move
-        
+        # Step 1: Upload to root first
         result = dood.local_upload(file_path)
         
         if not result:
             print("❌ Upload failed: No response from DoodStream")
             return None
         
-        # Handle different response formats
+        # Step 2: Extract file_code from response (handle all formats)
         file_code = None
-        video_id = None
         
-        if isinstance(result, list) and len(result) > 0:
-            item = result[0]
-            if isinstance(item, dict):
-                file_code = item.get('filecode') or item.get('id')
-                video_id = item.get('id') or item.get('filecode')
+        # Format 1: {'result': [{'filecode': '...', ...}], ...}
+        if isinstance(result, dict) and 'result' in result:
+            res_data = result['result']
+            if isinstance(res_data, list) and len(res_data) > 0:
+                file_code = res_data[0].get('filecode')
+            elif isinstance(res_data, dict):
+                file_code = res_data.get('filecode')
+        # Format 2: [{'filecode': '...', ...}]
+        elif isinstance(result, list) and len(result) > 0:
+            file_code = result[0].get('filecode')
+        # Format 3: {'filecode': '...', ...}
         elif isinstance(result, dict):
-            # Check if it's nested in 'result' key
-            if 'result' in result and isinstance(result['result'], (dict, list)):
-                res_data = result['result']
-                if isinstance(res_data, list) and len(res_data) > 0:
-                    res_data = res_data[0]
-                if isinstance(res_data, dict):
-                    file_code = res_data.get('filecode')
-                    video_id = res_data.get('id') or res_data.get('filecode')
-            if 'result' in result and isinstance(result['result'], dict):
-                file_code = result['result'].get('filecode')
-                video_id = result['result'].get('id')
-            else:
-                file_code = result.get('filecode')
-                video_id = result.get('id')
+            file_code = result.get('filecode')
         
         if not file_code:
-            print(f"❌ Could not get file code from upload. Response type: {type(result)}, Response: {result}")
+            print(f"❌ Could not get file code from upload. Response: {result}")
             return None
         
         print(f"✅ Uploaded to root! File code: {file_code}")
         
-        # Rename the file to have proper title
+        # Step 3: Rename file to proper title BEFORE moving
+        clean_title = video_title.replace('.mp4', '').replace(' ', '_')
         try:
-            rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={video_title}"
-            rename_resp = requests.get(rename_url).json()
+            rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={clean_title}"
+            rename_resp = requests.get(rename_url, timeout=10).json()
             if rename_resp.get('msg') == 'OK':
-                print(f"✅ Renamed file to: {video_title}")
+                print(f"✅ Renamed file to: {clean_title}")
+            else:
+                print(f"⚠️ Rename response: {rename_resp}")
         except Exception as e:
             print(f"⚠️ Could not rename file: {e}")
         
-        # Move to series folder if available
+        # Step 4: Move to series folder
         if target_folder_id:
             try:
                 print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
-                # Use clone to copy to folder, then delete original
+                
+                # Copy video to folder
                 move_result = dood.copy_video(file_code, target_folder_id)
                 
                 if move_result and move_result.get('msg') == 'OK':
-                    # Get the new file code from the folder
-                    time.sleep(2)
-                    folder_files = dood.list_files(folder_id=target_folder_id)
-                    new_file_code = None
+                    # Wait for copy to complete
+                    time.sleep(3)
                     
+                    # List files in folder to find the copied file
+                    folder_files = dood.list_files(folder_id=target_folder_id)
+                    if not isinstance(folder_files, list):
+                        folder_files = []
+                    
+                    new_file_code = None
                     for item in folder_files:
                         item_name = item.get('name', '')
-                        # Match by video title or recent file
-                        if video_title[:20] in item_name or item.get('added') == 'just now':
+                        # Match by title or filecode
+                        if clean_title.replace('_', ' ') in item_name or file_code == item.get('id'):
                             new_file_code = item.get('id') or item.get('filecode')
                             break
                     
                     if new_file_code:
-                        file_code = new_file_code
                         # Delete original from root
                         try:
-                            dood.delete_file([file_code.split('_')[0] if '_' in file_code else file_code])
-                        except:
-                            pass
+                            delete_result = dood.delete_file([file_code])
+                            if delete_result and delete_result.get('msg') == 'OK':
+                                print(f"✅ Deleted original from root")
+                        except Exception as e:
+                            print(f"⚠️ Could not delete original: {e}")
+                        
+                        file_code = new_file_code
                         print(f"✅ File moved to series folder: {series_name}")
                     else:
-                        print(f"⚠️ Could not find file in folder, but upload successful")
+                        print(f"⚠️ Could not find file in folder after copy")
                 else:
-                    print(f"⚠️ Move operation response: {move_result}")
+                    print(f"⚠️ Copy operation failed: {move_result}")
                     
             except Exception as e:
-                print(f"⚠️ Could not move to folder: {e}")
+                print(f"⚠️ Error moving to folder: {e}")
                 import traceback
                 traceback.print_exc()
-                # Use rename/move API if available, otherwise copy
-                move_result = dood.copy_video(file_code, target_folder_id)
-                if move_result:
-                    print(f"📁 Moved/copied to series folder: {series_name}")
-                    # Delete original from root
-                    try:
-                        dood.delete_file([file_code])
-                    except:
-                        pass
-                    # Get the file code from the folder
-                    time.sleep(2)
-                    folder_files = dood.list_files(folder_id=target_folder_id)
-                    for item in folder_files:
-                        item_name = item.get('name', '')
-                        if video_title[:20] in item_name or file_code in str(item.get('id', '')):
-                            file_code = item.get('id') or item.get('filecode') or file_code
-                            break
-                    print(f"✅ File now in folder: {series_name}")
-            except Exception as e:
-                print(f"⚠️ Could not move to folder: {e}")
-                # Continue anyway, file is in root
         
-        # Get share links
-        try:
-            links = dood.get_download_sources(file_code)
-            watch_link = links.get('download_url') if links else f"https://doodstream.com/d/{file_code}"
-            dl_link = links.get('download_url') if links else f"https://doodstream.com/download/{file_code}"
-        except:
-            watch_link = f"https://doodstream.com/d/{file_code}"
-            dl_link = f"https://doodstream.com/download/{file_code}"
-        
-        return {
-            'file_code': file_code,
-            'watch_link': watch_link,
-            'download_link': dl_link
-        }
+        # Return the final file code
+        return file_code
         
     except Exception as e:
         print(f"❌ Upload error: {e}")
         import traceback
         traceback.print_exc()
         return None
+
+
+def get_doodstream_links(file_code):
+    """Get watch and download links from DoodStream"""
+    # Get share links
+    try:
+        links = dood.get_download_sources(file_code)
+        watch_link = links.get('download_url') if links else f"https://doodstream.com/d/{file_code}"
+        dl_link = links.get('download_url') if links else f"https://doodstream.com/download/{file_code}"
+    except:
+        watch_link = f"https://doodstream.com/d/{file_code}"
+        dl_link = f"https://doodstream.com/download/{file_code}"
+    
+    return {
+        'file_code': file_code,
+        'watch_link': watch_link,
+        'download_link': dl_link
+    }
 
 def delete_from_google_drive(drive_file_id):
     """Delete file from Google Drive"""
@@ -778,7 +757,7 @@ def process_video(video_info, index, total):
     
     # Step 4: Upload to DoodStream (directly from local temp file)
     print(f"   ⬆️ Uploading to DoodStream...")
-    dood_result = upload_to_doodstream(
+    file_code = upload_to_doodstream(
         downloaded_path, 
         video_data['series_name'], 
         video_info['title']
@@ -792,12 +771,14 @@ def process_video(video_info, index, total):
     except:
         pass
     
-    if not dood_result:
+    if not file_code:
         update_sheet_realtime(video_data, status="❌ DoodStream upload failed")
         return False
     
-    video_data['dood_watch'] = dood_result['watch_link']
-    video_data['dood_download'] = dood_result['download_link']
+    # Get watch and download links
+    links = get_doodstream_links(file_code)
+    video_data['dood_watch'] = links['watch_link']
+    video_data['dood_download'] = links['download_link']
     
     # Step 5: FINAL UPDATE - Success
     update_sheet_realtime(video_data, status="✅ Success")
@@ -806,8 +787,8 @@ def process_video(video_info, index, total):
     save_processed_video(video_info['video_id'])
     
     print(f"   🎉 COMPLETED!")
-    print(f"   📺 Watch: {dood_result['watch_link']}")
-    print(f"   ⬇️ Download: {dood_result['download_link']}")
+    print(f"   📺 Watch: {links['watch_link']}")
+    print(f"   ⬇️ Download: {links['download_link']}")
     
     return True
 
