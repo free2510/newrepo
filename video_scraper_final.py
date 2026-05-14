@@ -35,7 +35,7 @@ CATEGORY_URL = "https://larozaa.yachts/category.php?cat=ramadan-2026"
 DOODSTREAM_API_KEY = "566462d6434dlvqu6fmesc"
 GOOGLE_SHEET_ID = "1Bpvo9v6san0VsD6Y1vW26UlxYWpWDqWFVbFga-Cczjg"
 CATEGORY_NAME = "رمضان 2026 - مسلسلات"
-TEMP_FOLDER = "/content/drive/MyDrive/.temp_videos"
+TEMP_FOLDER = "/content/temp_videos"
 PROCESSED_FILE = "/content/processed_videos.json"
 
 # ==================== INITIALIZATION ====================
@@ -43,9 +43,10 @@ print("=" * 60)
 print("🚀 Video Processing Pipeline - REAL-TIME UPDATES")
 print("=" * 60)
 
-# Install required packages
+# Install required packages (Google Colab magic command)
 print("\n📦 Installing dependencies...")
-!pip install -q requests beautifulsoup4 tqdm doodstream gspread oauth2client
+import subprocess
+subprocess.run(["pip", "install", "-q", "requests", "beautifulsoup4", "tqdm", "doodstream", "gspread", "oauth2client"], check=True)
 
 # Initialize DoodStream
 dood = DoodStream(DOODSTREAM_API_KEY)
@@ -132,7 +133,7 @@ def init_sheet():
         print(f"⚠️ Sheet init error: {e}")
         return False
 
-def upload_to_google_drive(file_path, title):
+def upload_to_google_drive(file_path, title, series_name=None):
     """Upload file to Google Drive and return file ID"""
     global drive_service
     
@@ -144,11 +145,37 @@ def upload_to_google_drive(file_path, title):
             print("❌ Cannot connect to Google Drive")
             return None
         
-        # File metadata
+        # Find or create series folder in MyDrive
+        parent_id = ''  # Root of MyDrive
+        if series_name:
+            try:
+                # Search for series folder
+                query = f"name='{series_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                result = drive_service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+                files = result.get('files', [])
+                
+                if files:
+                    parent_id = files[0].get('id')
+                    print(f"   📁 Using series folder: {series_name}")
+                else:
+                    # Create series folder
+                    folder_metadata = {
+                        'name': series_name,
+                        'mimeType': 'application/vnd.google-apps.folder'
+                    }
+                    folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                    parent_id = folder.get('id')
+                    print(f"   📁 Created series folder: {series_name}")
+            except Exception as e:
+                print(f"   ⚠️ Folder error: {e}")
+                parent_id = ''  # Fallback to root if folder creation fails
+        
+        # File metadata - use root if parent_id is empty string
         file_metadata = {
             'name': f"[TEMP] {title}",
-            'parents': [TEMP_FOLDER.replace('/content/drive/MyDrive/', '')]  # Put in temp folder
         }
+        if parent_id:
+            file_metadata['parents'] = [parent_id]
         
         media = MediaFileUpload(file_path, mimetype='video/mp4', resumable=True)
         
@@ -280,7 +307,7 @@ def extract_video_url(server_url):
         return None
 
 def download_video(url, filename):
-    """Download video with progress bar"""
+    """Download video with single-line progress bar"""
     filepath = os.path.join(TEMP_FOLDER, filename)
     
     try:
@@ -290,12 +317,15 @@ def download_video(url, filename):
         
         total_size = int(response.headers.get('content-length', 0))
         
+        # Use a single-line progress bar that updates in place
         with open(filepath, 'wb') as f, tqdm(
-            desc=f"⬇️ {filename[:40]}",
+            desc=f"⬇️ {filename[:30]}",
             total=total_size,
             unit='B',
             unit_scale=True,
             unit_divisor=1024,
+            bar_format='{l_bar}{bar}| {n:.1f}/{total_fmt} [{remaining}, {rate_fmt}]',
+            mininterval=0.5,
         ) as pbar:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
@@ -305,16 +335,16 @@ def download_video(url, filename):
         # Verify download
         if os.path.exists(filepath) and os.path.getsize(filepath) > 1024 * 1024:  # > 1MB
             size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            print(f"✅ Download successful! Size: {size_mb:.2f} MB")
+            print(f"\n   ✅ Download successful! Size: {size_mb:.2f} MB")
             return filepath
         else:
-            print(f"❌ Download failed: File too small")
+            print(f"\n   ❌ Download failed: File too small")
             if os.path.exists(filepath):
                 os.remove(filepath)
             return None
             
     except Exception as e:
-        print(f"❌ Download error: {e}")
+        print(f"\n   ❌ Download error: {e}")
         if os.path.exists(filepath):
             os.remove(filepath)
         return None
@@ -438,15 +468,6 @@ def upload_to_doodstream(file_path, series_name, video_title, drive_file_id=None
             watch_link = f"https://doodstream.com/d/{file_code}"
             dl_link = f"https://doodstream.com/download/{file_code}"
         
-        # ✅ CRITICAL: Delete from Google Drive IMMEDIATELY after successful upload
-        if drive_file_id:
-            try:
-                print(f"   🗑️ Deleting temp file from Google Drive...")
-                drive_service.files().delete(fileId=drive_file_id).execute()
-                print(f"   ✅ Temp file deleted from Drive!")
-            except Exception as del_err:
-                print(f"   ⚠️ Warning: Could not delete temp file: {del_err}")
-        
         return {
             'file_code': file_code,
             'watch_link': watch_link,
@@ -455,13 +476,31 @@ def upload_to_doodstream(file_path, series_name, video_title, drive_file_id=None
         
     except Exception as e:
         print(f"❌ Upload error: {e}")
-        # Try to cleanup even on error
-        if drive_file_id:
-            try:
-                drive_service.files().delete(fileId=drive_file_id).execute()
-            except:
-                pass
         return None
+
+def delete_from_google_drive(drive_file_id):
+    """Delete file from Google Drive"""
+    global drive_service
+    
+    if not drive_file_id:
+        return False
+    
+    try:
+        if not drive_service:
+            init_sheet()
+        
+        if not drive_service:
+            print("   ⚠️ Cannot connect to Google Drive for deletion")
+            return False
+        
+        print(f"   🗑️ Deleting temp file from Google Drive...")
+        drive_service.files().delete(fileId=drive_file_id).execute()
+        print(f"   ✅ Temp file deleted from Drive!")
+        return True
+        
+    except Exception as del_err:
+        print(f"   ⚠️ Warning: Could not delete temp file: {del_err}")
+        return False
 
 # ==================== GOOGLE SHEETS UPDATE ====================
 def update_sheet_realtime(video_data, status="Processing"):
@@ -594,32 +633,34 @@ def process_video(video_info, index, total):
     
     # Upload to Google Drive first (as temp storage)
     print(f"   ☁️ Uploading to Google Drive (temp)...")
-    drive_file_id = upload_to_google_drive(downloaded_path, video_info['title'])
+    drive_file_id = upload_to_google_drive(downloaded_path, video_info['title'], video_data['series_name'])
     
     if not drive_file_id:
         update_sheet_realtime(video_data, status="❌ Drive upload failed")
         return False
     
-    # Step 4: Upload to DoodStream (pass drive_file_id for cleanup)
+    # Step 4: Upload to DoodStream
     print(f"   ⬆️ Uploading to DoodStream...")
     dood_result = upload_to_doodstream(
         downloaded_path, 
         video_data['series_name'], 
-        video_info['title'],
-        drive_file_id  # ✅ Pass drive_file_id for automatic deletion
+        video_info['title']
     )
     
-    # Cleanup temp file
+    # Cleanup local temp file
     try:
         if os.path.exists(downloaded_path):
             os.remove(downloaded_path)
-            print("   🗑️ Temp file deleted")
+            print("   🗑️ Local temp file deleted")
     except:
         pass
     
     if not dood_result:
         update_sheet_realtime(video_data, status="❌ DoodStream upload failed")
         return False
+    
+    # ✅ CRITICAL: Delete from Google Drive AFTER successful DoodStream upload
+    delete_from_google_drive(drive_file_id)
     
     video_data['dood_watch'] = dood_result['watch_link']
     video_data['dood_download'] = dood_result['download_link']
