@@ -11,12 +11,25 @@ Folder Structure on DoodStream:
 
 Google Sheet Updates: AFTER EACH VIDEO (real-time)
 
-API Endpoints Used:
-- https://doodapi.com/api/list_folders - List folders
-- https://doodapi.com/api/folder/create - Create folder
-- https://doodapi.com/api/upload - Upload file
-- https://doodapi.com/api/file/rename - Rename file
-- https://doodapi.com/api/file/move - Move file to folder
+API Endpoints Used (per https://doodstream.com/api-docs):
+- Folder List: GET https://doodapi.co/api/folder/list?key={key}&fld_id={folder_id}
+  Response: {"msg": "OK", "result": {"folders": [{"name": "...", "code": "...", "fld_id": "..."}], "files": [...]}}
+- Folder Create: GET https://doodapi.co/api/folder/create?key={key}&name={name}&parent_id={parent_id}
+  Response: {"msg": "OK", "result": {"fld_id": "1234567"}}
+- File Rename: GET https://doodapi.co/api/file/rename?key={key}&file_code={code}&title={title}
+  Response: {"msg": "OK"}
+- File Move: GET https://doodapi.co/api/file/move?key={key}&file_code={code}&fld_id={folder_id}
+  Response: {"msg": "OK"}
+- File Clone: GET https://doodapi.co/api/file/clone?key={key}&file_code={code}&fld_id={folder_id}
+  Response: {"msg": "OK"}
+
+Key Changes (Latest Update):
+1. Fixed API endpoints from doodapi.com to doodapi.co (correct domain)
+2. Updated folder list API to use /api/folder/list instead of /api/list_folders
+3. Updated response parsing to handle {"result": {"folders": [...]}} structure
+4. Changed folder create parameter from 'parent' to 'parent_id' (correct API param)
+5. Added strict folder structure requirement - upload aborts if folders can't be created
+6. Added cleanup logic to delete files if they can't be moved to correct folder
 """
 
 import os
@@ -364,44 +377,45 @@ def download_video(url, filename):
 
 # ==================== DOODSTREAM FUNCTIONS ====================
 def get_or_create_folder_structure(series_name):
-    """Create Category -> Series folder structure on DoodStream"""
+    """Create Category -> Series folder structure on DoodStream
     
-    # Step 1: Find or create Category folder
+    API Endpoints (per https://doodstream.com/api-docs):
+    - Create: GET https://doodapi.co/api/folder/create?key={key}&name={name}&parent_id={parent_id}
+      Response: {"msg": "OK", "result": {"fld_id": "1234567"}}
+    - List: GET https://doodapi.co/api/folder/list?key={key}&fld_id={folder_id}&only_folders=1
+      Response: {"msg": "OK", "result": {"folders": [{"name": "...", "code": "...", "fld_id": "..."}], "files": [...]}}
+    """
+    
+    # Step 1: Find or create Category folder in root
     category_folder_id = None
     try:
-        # Use API to list files/folders in root
-        list_url = f"https://doodapi.com/api/list_folders?key={DOODSTREAM_API_KEY}"
+        # List folders in root (fld_id parameter is required, use empty or omit for root)
+        list_url = f"https://doodapi.co/api/folder/list?key={DOODSTREAM_API_KEY}"
         try:
             response = requests.get(list_url, timeout=10)
             response.raise_for_status()
-            files = response.json().get('result', [])
-            if not isinstance(files, list):
-                files = []
+            result_data = response.json().get('result', {})
+            folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
         except Exception as list_err:
             print(f"⚠️ List folders API error: {list_err}")
-            # Fallback to library method
-            files = dood.list_files()
-            if not isinstance(files, list):
-                files = []
+            folders = []
         
-        for item in files:
-            if item.get('name') == CATEGORY_NAME and item.get('is_folder'):
-                category_folder_id = item.get('id') or item.get('foldercode')
+        for item in folders:
+            if item.get('name') == CATEGORY_NAME:
+                category_folder_id = item.get('fld_id') or item.get('code')
                 print(f"📁 Found category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
                 break
         
         if not category_folder_id:
             print(f"📁 Creating category folder: {CATEGORY_NAME}")
-            # Use API directly for more reliable folder creation
-            create_url = f"https://doodapi.com/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(CATEGORY_NAME)}"
+            # Create folder in root (no parent_id needed)
+            create_url = f"https://doodapi.co/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(CATEGORY_NAME)}"
             result = requests.get(create_url, timeout=15).json()
             
             if result and result.get('msg') == 'OK':
                 res_data = result.get('result', {})
-                if isinstance(res_data, list) and len(res_data) > 0:
-                    category_folder_id = res_data[0].get('foldercode') or res_data[0].get('id')
-                elif isinstance(res_data, dict):
-                    category_folder_id = res_data.get('foldercode') or res_data.get('id')
+                if isinstance(res_data, dict):
+                    category_folder_id = res_data.get('fld_id')
                 
                 if category_folder_id:
                     print(f"✅ Created category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
@@ -412,12 +426,11 @@ def get_or_create_folder_structure(series_name):
                 try:
                     response = requests.get(list_url, timeout=10)
                     response.raise_for_status()
-                    files = response.json().get('result', [])
-                    if not isinstance(files, list):
-                        files = []
-                    for item in files:
+                    result_data = response.json().get('result', {})
+                    folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+                    for item in folders:
                         if item.get('name') == CATEGORY_NAME:
-                            category_folder_id = item.get('id') or item.get('foldercode')
+                            category_folder_id = item.get('fld_id') or item.get('code')
                             break
                 except:
                     pass
@@ -428,30 +441,27 @@ def get_or_create_folder_structure(series_name):
     series_folder_id = None
     if category_folder_id:
         try:
-            # List files in category folder
-            list_url = f"https://doodapi.com/api/list_folders?key={DOODSTREAM_API_KEY}&fld_id={category_folder_id}"
+            # List files/folders in category folder
+            list_url = f"https://doodapi.co/api/folder/list?key={DOODSTREAM_API_KEY}&fld_id={category_folder_id}"
             try:
                 response = requests.get(list_url, timeout=10)
                 response.raise_for_status()
-                series_files = response.json().get('result', [])
-                if not isinstance(series_files, list):
-                    series_files = []
+                result_data = response.json().get('result', {})
+                series_folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
             except Exception as list_err:
                 print(f"⚠️ List series folders API error: {list_err}")
-                series_files = dood.list_files(folder_id=category_folder_id)
-                if not isinstance(series_files, list):
-                    series_files = []
+                series_folders = []
             
-            for item in series_files:
-                if item.get('name') == series_name and item.get('is_folder'):
-                    series_folder_id = item.get('id') or item.get('foldercode')
+            for item in series_folders:
+                if item.get('name') == series_name:
+                    series_folder_id = item.get('fld_id') or item.get('code')
                     print(f"📁 Found series folder: {series_name} (ID: {series_folder_id})")
                     break
             
             if not series_folder_id:
                 print(f"📁 Creating series folder: {series_name}")
-                # Use API directly for more reliable folder creation
-                create_url = f"https://doodapi.com/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(series_name)}&parent={category_folder_id}"
+                # Create folder inside category folder with parent_id
+                create_url = f"https://doodapi.co/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(series_name)}&parent_id={category_folder_id}"
                 result = requests.get(create_url, timeout=15)
                 result.raise_for_status()
                 result_json = result.json()
@@ -460,10 +470,8 @@ def get_or_create_folder_structure(series_name):
                 
                 if result_json and result_json.get('msg') == 'OK':
                     res_data = result_json.get('result', {})
-                    if isinstance(res_data, list) and len(res_data) > 0:
-                        series_folder_id = res_data[0].get('foldercode') or res_data[0].get('id')
-                    elif isinstance(res_data, dict):
-                        series_folder_id = res_data.get('foldercode') or res_data.get('id')
+                    if isinstance(res_data, dict):
+                        series_folder_id = res_data.get('fld_id')
                     
                     if series_folder_id:
                         print(f"✅ Created series folder: {series_name} (ID: {series_folder_id})")
@@ -474,12 +482,11 @@ def get_or_create_folder_structure(series_name):
                     try:
                         response = requests.get(list_url, timeout=10)
                         response.raise_for_status()
-                        series_files = response.json().get('result', [])
-                        if not isinstance(series_files, list):
-                            series_files = []
-                        for item in series_files:
+                        result_data = response.json().get('result', {})
+                        series_folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+                        for item in series_folders:
                             if item.get('name') == series_name:
-                                series_folder_id = item.get('id') or item.get('foldercode')
+                                series_folder_id = item.get('fld_id') or item.get('code')
                                 break
                     except:
                         pass
@@ -489,13 +496,27 @@ def get_or_create_folder_structure(series_name):
     return category_folder_id, series_folder_id
 
 def upload_to_doodstream(file_path, series_name, video_title):
-    """Upload video to DoodStream in correct folder structure: Category > Series > Video"""
+    """Upload video to DoodStream in correct folder structure: Category > Series > Video
     
+    API Endpoints (per https://doodstream.com/api-docs):
+    - Upload: Uses doodstream library local_upload (uploads to root)
+    - Rename: GET https://doodapi.co/api/file/rename?key={key}&file_code={code}&title={title}
+    - Move: GET https://doodapi.co/api/file/move?key={key}&file_code={code}&fld_id={folder_id}
+    
+    IMPORTANT: If folder structure cannot be created, DO NOT upload the video.
+    The video MUST be placed in the correct folder structure.
+    """
+    
+    # Step 0: Create/get folder structure FIRST - must succeed before upload
+    print(f"📁 Ensuring folder structure exists: {CATEGORY_NAME} > {series_name}")
     cat_folder_id, series_folder_id = get_or_create_folder_structure(series_name)
     target_folder_id = series_folder_id if series_folder_id else cat_folder_id
     
+    # CRITICAL: If we can't create the folder structure, abort upload
     if not target_folder_id:
-        print("❌ No target folder available, uploading to root")
+        print("❌ ERROR: Could not create folder structure. Aborting upload.")
+        print("   The video MUST be placed in: Ramadan 2026 - مسلسلات > [Series Name]")
+        return None
     
     try:
         print(f"⬆️ Uploading to DoodStream...")
@@ -536,7 +557,7 @@ def upload_to_doodstream(file_path, series_name, video_title):
         
         # Step 3: Rename file to proper title
         try:
-            rename_url = f"https://doodapi.com/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={requests.utils.quote(clean_title)}"
+            rename_url = f"https://doodapi.co/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={requests.utils.quote(clean_title)}"
             rename_resp = requests.get(rename_url, timeout=10).json()
             if rename_resp.get('msg') == 'OK':
                 print(f"✅ Renamed file to: {clean_title}")
@@ -546,33 +567,37 @@ def upload_to_doodstream(file_path, series_name, video_title):
             print(f"⚠️ Could not rename file: {e}")
         
         # Step 4: Move to series folder using API (move directly instead of clone+delete)
-        if target_folder_id:
+        # This is REQUIRED - video must be in correct folder
+        print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
+        
+        move_url = f"https://doodapi.co/api/file/move?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
+        move_resp = requests.get(move_url, timeout=15).json()
+        
+        if move_resp.get('msg') == 'OK':
+            print(f"✅ Moved to folder successfully")
+        else:
+            print(f"⚠️ Move to folder response: {move_resp}")
+            # Fallback: Try clone + delete if move fails
             try:
-                print(f"📁 Moving to folder: {series_name} (ID: {target_folder_id})")
+                copy_url = f"https://doodapi.co/api/file/clone?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
+                copy_resp = requests.get(copy_url, timeout=15).json()
                 
-                # Use the official move API endpoint
-                move_url = f"https://doodapi.com/api/file/move?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
-                move_resp = requests.get(move_url, timeout=15).json()
-                
-                if move_resp.get('msg') == 'OK':
-                    print(f"✅ Moved to folder successfully")
+                if copy_resp.get('msg') == 'OK':
+                    print(f"✅ Copied to folder (fallback method)")
+                    time.sleep(2)
+                    delete_result = dood.delete_file([file_code])
+                    if delete_result and delete_result.get('msg') == 'OK':
+                        print(f"✅ Deleted original from root")
                 else:
-                    print(f"⚠️ Move to folder response: {move_resp}")
-                    # Fallback: Try clone + delete if move fails
-                    try:
-                        copy_url = f"https://doodapi.com/api/file/clone?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
-                        copy_resp = requests.get(copy_url, timeout=15).json()
-                        
-                        if copy_resp.get('msg') == 'OK':
-                            print(f"✅ Copied to folder (fallback method)")
-                            time.sleep(2)
-                            delete_result = dood.delete_file([file_code])
-                            if delete_result and delete_result.get('msg') == 'OK':
-                                print(f"✅ Deleted original from root")
-                    except Exception as fallback_err:
-                        print(f"⚠️ Fallback also failed: {fallback_err}")
-            except Exception as e:
-                print(f"⚠️ Error moving to folder: {e}")
+                    print(f"❌ CRITICAL: Could not move file to folder. Upload aborted.")
+                    # Delete the uploaded file since it's in wrong location
+                    dood.delete_file([file_code])
+                    return None
+            except Exception as fallback_err:
+                print(f"⚠️ Fallback also failed: {fallback_err}")
+                print(f"❌ CRITICAL: Could not place file in correct folder. Deleting uploaded file.")
+                dood.delete_file([file_code])
+                return None
         
         # Build final URLs
         watch_url = f"https://dsvplay.com/e/{file_code}"
