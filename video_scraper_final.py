@@ -881,7 +881,7 @@ def process_video(video_info, index, total):
     
     # Step 4: Upload to DoodStream (directly from local temp file)
     print(f"   ⬆️ Uploading to DoodStream...")
-    file_code = upload_to_doodstream(
+    upload_result = upload_to_doodstream(
         downloaded_path, 
         video_data['series_name'], 
         video_info['title']
@@ -895,19 +895,19 @@ def process_video(video_info, index, total):
     except:
         pass
     
-    if not file_code:
+    if not upload_result:
         update_sheet_realtime(video_data, status="❌ DoodStream upload failed")
         return False
     
-    # Get watch and download links
-    links = get_doodstream_links(file_code)
-    video_data['dood_watch'] = links['watch_link']
-    video_data['dood_download'] = links['download_link']
+    # Get watch and download links from the upload result
+    video_data['dood_watch'] = upload_result.get('watch_url', '')
+    video_data['dood_download'] = upload_result.get('download_url', '')
     
     # Step 5: FINAL UPDATE - Success
     update_sheet_realtime(video_data, status="✅ Success")
     
     # Save progress
+    file_code = upload_result.get('filecode', '')
     save_processed_video(video_info['video_id'])
     
     print(f"   🎉 COMPLETED!")
