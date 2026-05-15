@@ -373,6 +373,7 @@ def get_or_create_folder_structure(series_name):
         list_url = f"https://doodapi.com/api/list_folders?key={DOODSTREAM_API_KEY}"
         try:
             response = requests.get(list_url, timeout=10)
+            response.raise_for_status()
             files = response.json().get('result', [])
             if not isinstance(files, list):
                 files = []
@@ -410,6 +411,7 @@ def get_or_create_folder_structure(series_name):
                 time.sleep(1)
                 try:
                     response = requests.get(list_url, timeout=10)
+                    response.raise_for_status()
                     files = response.json().get('result', [])
                     if not isinstance(files, list):
                         files = []
@@ -430,6 +432,7 @@ def get_or_create_folder_structure(series_name):
             list_url = f"https://doodapi.com/api/list_folders?key={DOODSTREAM_API_KEY}&fld_id={category_folder_id}"
             try:
                 response = requests.get(list_url, timeout=10)
+                response.raise_for_status()
                 series_files = response.json().get('result', [])
                 if not isinstance(series_files, list):
                     series_files = []
@@ -449,10 +452,14 @@ def get_or_create_folder_structure(series_name):
                 print(f"📁 Creating series folder: {series_name}")
                 # Use API directly for more reliable folder creation
                 create_url = f"https://doodapi.com/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(series_name)}&parent={category_folder_id}"
-                result = requests.get(create_url, timeout=15).json()
+                result = requests.get(create_url, timeout=15)
+                result.raise_for_status()
+                result_json = result.json()
                 
-                if result and result.get('msg') == 'OK':
-                    res_data = result.get('result', {})
+                print(f"   📋 Create folder response: {result_json}")
+                
+                if result_json and result_json.get('msg') == 'OK':
+                    res_data = result_json.get('result', {})
                     if isinstance(res_data, list) and len(res_data) > 0:
                         series_folder_id = res_data[0].get('foldercode') or res_data[0].get('id')
                     elif isinstance(res_data, dict):
@@ -466,6 +473,7 @@ def get_or_create_folder_structure(series_name):
                     time.sleep(1)
                     try:
                         response = requests.get(list_url, timeout=10)
+                        response.raise_for_status()
                         series_files = response.json().get('result', [])
                         if not isinstance(series_files, list):
                             series_files = []
@@ -589,15 +597,10 @@ def upload_to_doodstream(file_path, series_name, video_title):
 
 
 def get_doodstream_links(file_code):
-    """Get watch and download links from DoodStream"""
-    # Get share links
-    try:
-        links = dood.get_download_sources(file_code)
-        watch_link = links.get('download_url') if links else f"https://doodstream.com/d/{file_code}"
-        dl_link = links.get('download_url') if links else f"https://doodstream.com/download/{file_code}"
-    except:
-        watch_link = f"https://doodstream.com/d/{file_code}"
-        dl_link = f"https://doodstream.com/download/{file_code}"
+    """Get watch and download links from DoodStream - returns clean URLs only"""
+    # Construct clean URLs directly without using library that returns JSON
+    watch_link = f"https://doodstream.com/d/{file_code}"
+    dl_link = f"https://doodstream.com/download/{file_code}"
     
     return {
         'file_code': file_code,

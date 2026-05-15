@@ -13,19 +13,19 @@ This document explains the complete workflow of the video scraper and uploader.
 
 1. SCRAPE CATEGORY PAGE
    └─→ Extract video links from larozaa.yachts
-   
+
 2. FOR EACH VIDEO:
-   
+
    a. Get Watch Servers
       └─→ Visit play.php?vid=VIDEO_ID
       └─→ Extract all server embed URLs
       └─→ Test each server until finding working one
-   
+
    b. Download Video
       └─→ Download to /content/temp_videos/
       └─→ Verify file size > 1MB
       └─→ Show single-line progress bar
-   
+
    c. Upload to DoodStream ⬆️
       └─→ Upload to DoodStream root via API
       └─→ Rename file with Arabic title via API
@@ -33,18 +33,18 @@ This document explains the complete workflow of the video scraper and uploader.
       └─→ Create Series folder inside Category via API
       └─→ Move video to Series folder via API
       └─→ Delete from root (automatic after move)
-   
+
    d. Update Google Sheet
       └─→ Check if row already exists
       └─→ If exists: UPDATE row
       └─→ If new: CREATE row
-      └─→ Add: Timestamp, Title, Video ID, Watch Link, 
+      └─→ Add: Timestamp, Title, Video ID, Watch Link,
                Series, Category, DoodStream links, Status
-   
+
    e. Cleanup
       └─→ Delete local temp file
       └─→ Mark video as processed in JSON
-   
+
 3. RESUME SUPPORT
    └─→ Track processed videos in processed_videos.json
    └─→ Skip already processed on restart
@@ -100,69 +100,107 @@ This document explains the complete workflow of the video scraper and uploader.
 
 ### Step 2b: Download Video
 
-**Input**: Video URL, video title
+**Input**: Direct video URL (MP4)
 
 **Process**:
-1. Create sanitized filename: `[VIDEO_ID]_[TITLE].mp4`
-2. Download to `/content/temp_videos/[FILENAME]`
-3. Show single-line progress bar (tqdm)
+1. Generate safe filename: `{video_id}_{series_name}.mp4`
+2. Download to `/content/temp_videos/` (local storage, NOT Google Drive)
+3. Show single-line progress bar with tqdm
 4. Verify downloaded file size > 1MB
-5. Return path to downloaded file
+5. If verification fails, delete partial file
 
-**Output**: Path to local video file
+**Output**: Path to downloaded video file
 
-**Example Output**:
-```
-⬇️ 8b828925a_مسلسل_حكاية_نرجس.mp4: 100%|██████████| 118M/113M [00:00, 26.2MB/s]
-✅ Download successful! Size: 112.73 MB
-```
+**Why Local Temp Storage?**
+- Faster than uploading to Google Drive then downloading
+- Saves Google Drive quota
+- Automatic cleanup after upload
 
 ---
 
 ### Step 2c: Upload to DoodStream
 
-**Input**: Local file path, series name, video title
+**Input**: Local video file path, series name, video title
 
 **Process**:
 
 #### Phase 1: Upload to Root
-1. Call DoodStream API: `/api/upload`
-2. Send file as multipart/form-data
-3. Receive response with `filecode`
-4. Store filecode for next steps
+```python
+result = dood.local_upload(file_path)
+file_code = extract_filecode(result)
+```
 
 #### Phase 2: Rename File
-1. Call DoodStream API: `/api/file/rename`
-2. Parameters: `filecode`, `title` (URL-encoded Arabic title)
-3. Wait 1-2 seconds for API to process
-4. Verify rename successful
+```python
+rename_url = f"https://doodapi.com/api/file/rename?key={API_KEY}&file_code={file_code}&title={quote(video_title)}"
+requests.get(rename_url)
+```
 
 #### Phase 3: Create Folder Structure
-1. **Get or Create Category Folder**:
-   - Call `/api/list_folders` to check if exists
-   - If not exists: Call `/api/folder/create` with category name
-   - Store category folder code
 
-2. **Get or Create Series Folder**:
-   - Call `/api/list_folders` with parent=category to check if exists
-   - If not exists: Call `/api/folder/create` with series name, parent=category
-   - Store series folder code
+**Category Folder** (`رمضان 2026 - مسلسلات`):
+```python
+# List existing folders
+response = requests.get(f"https://doodapi.com/api/list_folders?key={API_KEY}")
+response.raise_for_status()  # Catch HTTP errors
+folders = response.json().get('result', [])
 
-#### Phase 4: Move to Folder
-1. Call `/api/file/move` with:
-   - `filecode`: Video file code
-   - `fld_id`: Series folder code
-2. Verify move successful
-3. Fallback: If move fails, try clone + delete method
+# Find or create category folder
+for folder in folders:
+    if folder['name'] == CATEGORY_NAME:
+        category_id = folder['id']
+        break
 
-**Output**: DoodStream file code, watch URL, download URL
+if not category_id:
+    create_url = f"https://doodapi.com/api/folder/create?key={API_KEY}&name={quote(CATEGORY_NAME)}"
+    result = requests.get(create_url)
+    result.raise_for_status()
+    category_id = extract_folder_code(result.json())
+```
 
-**Folder Structure**:
+**Series Folder** (e.g., `مسلسل حكاية نرجس`):
+```python
+# List folders inside category
+list_url = f"https://doodapi.com/api/list_folders?key={API_KEY}&fld_id={category_id}"
+response = requests.get(list_url)
+response.raise_for_status()
+series_folders = response.json().get('result', [])
+
+# Find or create series folder
+for folder in series_folders:
+    if folder['name'] == series_name:
+        series_id = folder['id']
+        break
+
+if not series_id:
+    create_url = f"https://doodapi.com/api/folder/create?key={API_KEY}&name={quote(series_name)}&parent={category_id}"
+    result = requests.get(create_url)
+    result.raise_for_status()
+    print(f"Create folder response: {result.json()}")  # Debug logging
+    series_id = extract_folder_code(result.json())
+```
+
+#### Phase 4: Move to Series Folder
+```python
+move_url = f"https://doodapi.com/api/file/move?key={API_KEY}&file_code={file_code}&fld_id={series_id}"
+response = requests.get(move_url)
+
+if response.json().get('msg') != 'OK':
+    # Fallback: clone + delete
+    copy_url = f"https://doodapi.com/api/file/clone?key={API_KEY}&file_code={file_code}&fld_id={series_id}"
+    copy_resp = requests.get(copy_url).json()
+    if copy_resp.get('msg') == 'OK':
+        dood.delete_file([file_code])
+```
+
+**Output**: Dictionary with filecode, watch_url, download_url
+
+**Folder Structure Created**:
 ```
 DoodStream/
 └── رمضان 2026 - مسلسلات (Category)
     └── مسلسل حكاية نرجس (Series)
-        └── مسلسل حكاية نرجس الحلقة 7 السابعة.mp4
+        └── مسلسل حكاية نرجس الحلقة 7 السابعة.mp4 (Video)
 ```
 
 **API Endpoints Used**:
@@ -176,167 +214,167 @@ DoodStream/
 
 ### Step 2d: Update Google Sheet
 
-**Input**: Video data, DoodStream URLs, status
+**Input**: Video data dictionary
 
 **Process**:
-1. **Check if row exists**:
-   - Search column C (Video ID) for matching ID
-   - If found: Get row number
-   - If not found: Prepare to create new row
+1. Check if video ID already exists in sheet (Column C)
+2. If exists: UPDATE that row with new data
+3. If new: APPEND new row
 
-2. **Update or Create**:
-   - **If row exists**: Update columns A-I with new data
-   - **If new row**: Append row with all data
+**Sheet Columns**:
+| Column | Header | Example |
+|--------|--------|---------|
+| A | Timestamp | 2026-05-15 00:07:04 |
+| B | Title | مسلسل حكاية نرجس الحلقة 7 السابعة |
+| C | Video ID | 8b828925a |
+| D | Watch Link | https://mp4plus.org/embed-vwh1wabjso5l.html |
+| E | Series Name | مسلسل حكاية نرجس |
+| F | Category | رمضان 2026 - مسلسلات |
+| G | DoodStream Watch | https://doodstream.com/d/99iueh3f2ek4 |
+| H | DoodStream Download | https://doodstream.com/download/99iueh3f2ek4 |
+| I | Status | ✅ Success |
 
-3. **Columns Updated**:
-   - A: Timestamp (current time)
-   - B: Title (full video title)
-   - C: Video ID (unique identifier)
-   - D: Watch Link (original play page URL)
-   - E: Series Name (extracted from title)
-   - F: Category (category name)
-   - G: DoodStream Watch (watch URL)
-   - H: DoodStream Download (download URL)
-   - I: Status (✅ Success or ❌ Error message)
+**Clean URLs**: The script generates clean URLs directly without using the DoodStream library:
+```python
+def get_doodstream_links(file_code):
+    """Returns clean URLs, not JSON objects"""
+    return {
+        'watch_link': f"https://doodstream.com/d/{file_code}",
+        'download_link': f"https://doodstream.com/download/{file_code}"
+    }
+```
 
-**Output**: Updated Google Sheet row
-
-**Example Sheet Row**:
-| Timestamp | Title | Video ID | Watch Link | Series Name | Category | DoodStream Watch | DoodStream Download | Status |
-|-----------|-------|----------|------------|-------------|----------|------------------|---------------------|--------|
-| 2026-05-14 20:19:48 | مسلسل حكاية نرجس الحلقة 7 السابعة | 8b828925a | https://... | مسلسل حكاية نرجس | رمضان 2026 - مسلسلات | https://dood... | https://dood... | ✅ Success |
+**Real-Time Updates**:
+- Initial status: "⏳ Starting"
+- Final status: "✅ Success" or "❌ Error: [reason]"
+- Updates happen IMMEDIATELY after each video completes
 
 ---
 
 ### Step 2e: Cleanup
 
 **Process**:
-1. Delete local temp file: `os.remove(downloaded_path)`
-2. Mark video as processed:
-   - Load `processed_videos.json`
-   - Add video ID to list
-   - Save back to file
-3. Log completion message
+1. Delete local temp file from `/content/temp_videos/`
+2. Add video ID to `processed_videos.json`
+3. Save updated processed list
 
-**Output**: Clean temp folder, updated processed list
+**Why Cleanup?**
+- Frees up disk space for next video
+- Prevents running out of storage in Google Colab
+- Ensures clean state for resume
 
 ---
 
-## Resume Mechanism
+### Step 3: Resume Support
 
-### How It Works
+**Tracking File**: `/content/processed_videos.json`
 
-1. **Tracking File**: `processed_videos.json`
-   ```json
-   {
-     "processed_videos": [
-       "8b828925a",
-       "04cb7b3d9",
-       "..."]
-   }
-   ```
+**Format**:
+```json
+[
+  "8b828925a",
+  "04cb7b3d9",
+  "32bf9141a"
+]
+```
 
-2. **On Script Start**:
-   - Load `processed_videos.json`
-   - For each video scraped from website:
-     - Check if video_id in processed list
-     - If yes: Skip (already done)
-     - If no: Process normally
+**How It Works**:
+1. On startup, load processed video IDs from JSON file
+2. When scraping category, skip videos with IDs in the set
+3. After successful upload, add video ID to set and save
+4. User can run script multiple times to process remaining videos
 
-3. **After Each Video**:
-   - Add video_id to processed list
-   - Save to JSON file immediately
-
-### Benefits
-
-- **Interrupt Recovery**: If script stops, just run again
-- **No Duplicates**: Already processed videos are skipped
-- **Progress Tracking**: Know exactly which videos are done
-- **Batch Processing**: Can process in multiple sessions
+**Benefits**:
+- No duplicate uploads
+- Can process large batches in multiple sessions
+- Survives script crashes or Colab disconnections
 
 ---
 
 ## Error Handling
 
-### Download Errors
+### Network Errors
+- **Timeout**: 15 seconds for API calls, 10 seconds for folder listing
+- **Retry Logic**: 3 attempts for Google Sheets updates
+- **Fallback Methods**: Clone+delete if move fails
 
-| Error | Cause | Solution |
+### API Errors
+- **HTTP Errors**: `response.raise_for_status()` catches 4xx/5xx errors
+- **JSON Parsing**: Wrapped in try-except to handle empty responses
+- **Debug Logging**: Print API responses for troubleshooting
+
+### Common Issues & Solutions
+
+| Issue | Cause | Solution |
 |-------|-------|----------|
-| "File too small" | Server returned HTML | Try next server |
-| "403 Forbidden" | Access denied | Try next server |
-| "Network error" | Connection issue | Retry with timeout |
-| "Timeout" | Slow server | Increase timeout, retry |
-
-### Upload Errors
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| "Invalid API key" | Wrong key | Check API key in config |
-| "Folder create failed" | API error | Retry, check folder name |
-| "Move failed" | File not found | Verify upload completed |
-| "Rename failed" | API rate limit | Wait 1-2 seconds, retry |
-
-### Sheet Errors
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| "Sheet not found" | Wrong ID | Check Sheet ID |
-| "Permission denied" | No access | Share sheet with account |
-| "Duplicate rows" | Bug | Fixed in v2.0 - updates row instead |
+| "Expecting value: line 1 column 1" | Empty API response | Added `raise_for_status()` |
+| JSON in Google Sheets | Using library method | Direct URL construction |
+| Folder not created | API error | Debug logging added |
+| Rate limiting | Too many requests | Added delays between calls |
 
 ---
 
-## Performance Optimization
+## Performance Optimizations
 
-### Current Optimizations
-
-1. **Single-line progress bar** - Reduces console output
-2. **Local temp storage** - Faster than Drive upload/download
-3. **Auto-cleanup** - Deletes temp files immediately
-4. **Server testing** - Stops at first working server
-5. **Resume support** - Skips processed videos
-6. **Real-time updates** - See progress live in sheet
-7. **Direct API calls** - More reliable folder operations
-8. **URL encoding** - Proper handling of Arabic titles
-
-### Best Practices
-
-1. **Process in batches** of 10-20 videos
-2. **Monitor sheet** for errors during processing
-3. **Don't interrupt** during upload (can cause duplicates)
-4. **Wait between runs** if processing many videos
-5. **Check temp folder** occasionally for stuck files
+1. **Single-Line Progress Bars**: Prevents log spam during downloads
+2. **Direct API Calls**: More reliable than library methods
+3. **URL Encoding**: Proper handling of Arabic characters
+4. **HTTP Error Checking**: Catch errors before JSON parsing
+5. **Local Temp Storage**: Faster than Google Drive round-trip
+6. **Resume Capability**: Process in batches, resume anytime
 
 ---
 
-## File Locations
+## Complete Flow Example
 
-### During Processing
+Let's trace processing one video:
 
-| Location | Purpose | Retained? |
-|----------|---------|-----------|
-| `/content/temp_videos/` | Temp video storage | ❌ Deleted after upload |
-| `/content/processed_videos.json` | Resume tracking | ✅ Kept for resume |
-| `/content/token.json` | Google auth token | ✅ Kept for auth |
-| Google Sheets | Progress tracking | ✅ Kept permanently |
-| DoodStream | Final video storage | ✅ Kept permanently |
+**Video**: "مسلسل حكاية نرجس الحلقة 7 السابعة"
 
-### After Processing
+1. **Scrape**: Found in category page with video_id=`8b828925a`
+2. **Check**: Not in `processed_videos.json` → Process it
+3. **Servers**: Found 12 servers, tested 1-6, server 6 works
+4. **Download**: Downloaded 112.73 MB to `/content/temp_videos/8b828925a_مسلسل_حكاية_نرجس.mp4`
+5. **Upload**: Uploaded to DoodStream root → filecode=`99iueh3f2ek4`
+6. **Rename**: Renamed to "مسلسل حكاية نرجس الحلقة 7 السابعة"
+7. **Folders**: 
+   - Category "رمضان 2026 - مسلسلات" exists → use it
+   - Series "مسلسل حكاية نرجس" created inside category
+8. **Move**: Moved file to series folder
+9. **Sheet**: Updated Google Sheet row with clean URLs
+10. **Cleanup**: Deleted local temp file
+11. **Track**: Added `8b828925a` to processed_videos.json
 
-- **Local temp**: Empty (all files deleted)
-- **Google Drive**: Empty (never used for storage)
-- **DoodStream**: Organized folders with videos
-- **Google Sheet**: Complete record of all videos
+**Result**:
+- ✅ Video uploaded to correct folder structure
+- ✅ Google Sheet updated with clean URLs
+- ✅ Local storage cleaned up
+- ✅ Progress saved for resume
 
 ---
 
-## Next Steps
+## Version History
 
-- See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues
-- See [API_REFERENCE.md](API_REFERENCE.md) for DoodStream API details
-- See [CHANGELOG.md](CHANGELOG.md) for version history
+### v2.2 (2026-05-15)
+- Added `response.raise_for_status()` to all API calls
+- Added debug logging for folder creation
+- Fixed Google Sheets to show clean URLs instead of JSON
+- Improved error messages for HTTP and JSON errors
+
+### v2.1 (2026-05-14)
+- Implemented direct API calls for folder operations
+- Added URL encoding for Arabic folder names
+- Changed rename endpoint to `/api/file/rename`
+- Changed move method to `/api/file/move` with fallback
+- Updated documentation
+
+### v2.0 (2026-05-13)
+- Real-time Google Sheets updates
+- Local temp storage (not Google Drive)
+- Resume capability with JSON tracking
+- Single-line progress bars
 
 ---
 
-**Last Updated**: 2026-05-14  
-**Version**: 2.1
+**Last Updated**: 2026-05-15  
+**Version**: 2.2
