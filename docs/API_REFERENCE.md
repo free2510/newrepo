@@ -8,7 +8,7 @@ Complete reference for DoodStream API integration used in the video scraper.
 
 The script uses the official [DoodStream API](https://doodstream.com/api-docs) to:
 - Upload video files
-- Create folder structure
+- Create folder structure (Category → Series → Video)
 - Rename files with Arabic titles
 - Move files to folders
 - List existing folders
@@ -62,6 +62,8 @@ GET https://doodapi.com/api/list_folders?key=YOUR_API_KEY&fld_id=FOLDER_ID
 
 **Used in Script**: `get_or_create_folder_structure()` - Check if category/series folders exist
 
+**Error Handling**: Added `response.raise_for_status()` to catch HTTP errors and prevent JSON parsing errors on empty responses.
+
 ---
 
 ### 2. Create Folder
@@ -110,7 +112,10 @@ def create_folder(name, parent_id=None, api_key=None):
         params["parent"] = parent_id
     
     response = requests.get(url, params=params)
+    response.raise_for_status()  # Raise error on HTTP failures
     result = response.json()
+    
+    print(f"Create folder response: {result}")  # Debug logging
     
     # Extract folder code from response
     if 'result' in result:
@@ -352,8 +357,9 @@ def get_or_create_folder(name, parent_id, api_key):
     if parent_id:
         list_url += f"&fld_id={parent_id}"
     
-    response = requests.get(list_url).json()
-    files = response.get('result', [])
+    response = requests.get(list_url)
+    response.raise_for_status()  # Catch HTTP errors
+    files = response.json().get('result', [])
     
     # Check if folder already exists
     for item in files:
@@ -366,8 +372,11 @@ def get_or_create_folder(name, parent_id, api_key):
     if parent_id:
         params["parent"] = parent_id
     
-    response = requests.get(create_url, params=params).json()
-    result = response.get('result', {})
+    response = requests.get(create_url, params=params)
+    response.raise_for_status()
+    result = response.json()
+    
+    print(f"Create folder response: {result}")  # Debug logging
     
     # Handle different response formats
     if isinstance(result, list) and len(result) > 0:
@@ -433,6 +442,27 @@ def extract_code(response):
     return None
 ```
 
+### HTTP Error Handling
+
+Added `response.raise_for_status()` to catch HTTP errors before attempting JSON parsing:
+
+```python
+try:
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()  # Raise exception for 4xx/5xx errors
+    data = response.json().get('result', [])
+except requests.exceptions.HTTPError as e:
+    print(f"HTTP error: {e}")
+    print(f"Response content: {response.text}")
+    data = []
+except json.JSONDecodeError as e:
+    print(f"JSON decode error: {e}")
+    print(f"Response content: {response.text}")
+    data = []
+```
+
+This prevents errors like "Expecting value: line 1 column 1 (char 0)" when the API returns an empty response or error page.
+
 ---
 
 ## Rate Limiting
@@ -483,6 +513,46 @@ rename_url = f"https://doodapi.com/api/file/rename?key={api_key}&file_code={file
 
 ---
 
+## Google Sheets Integration
+
+### Clean URL Generation
+
+The script generates clean URLs directly without using the DoodStream library that returns JSON:
+
+```python
+def get_doodstream_links(file_code):
+    """Get watch and download links - returns clean URLs only"""
+    watch_link = f"https://doodstream.com/d/{file_code}"
+    dl_link = f"https://doodstream.com/download/{file_code}"
+    
+    return {
+        'file_code': file_code,
+        'watch_link': watch_link,
+        'download_link': dl_link
+    }
+```
+
+**Why this approach?**
+- The `dood.get_download_sources()` library method returns JSON objects instead of clean URLs
+- Direct URL construction is more reliable and predictable
+- Google Sheets columns show clean, readable URLs instead of JSON strings
+
+### Sheet Columns
+
+| Column | Header | Example Value |
+|--------|--------|---------------|
+| A | Timestamp | 2026-05-15 00:07:04 |
+| B | Title | مسلسل حكاية نرجس الحلقة 7 السابعة |
+| C | Video ID | 8b828925a |
+| D | Watch Link | https://mp4plus.org/embed-vwh1wabjso5l.html |
+| E | Series Name | مسلسل حكاية نرجس |
+| F | Category | رمضان 2026 - مسلسلات |
+| G | DoodStream Watch | https://doodstream.com/d/99iueh3f2ek4 |
+| H | DoodStream Download | https://doodstream.com/download/99iueh3f2ek4 |
+| I | Status | ✅ Success |
+
+---
+
 ## Testing
 
 ### Test Upload Script
@@ -495,12 +565,14 @@ API_KEY = "your_api_key_here"
 
 # Test 1: List Folders
 response = requests.get(f"https://doodapi.com/api/list_folders?key={API_KEY}")
+response.raise_for_status()
 print("Folders:", response.json())
 
 # Test 2: Create Folder
 response = requests.get(
     f"https://doodapi.com/api/folder/create?key={API_KEY}&name={quote('Test Folder')}"
 )
+response.raise_for_status()
 print("Folder Created:", response.json())
 
 # Test 3: Upload File (requires actual file)
@@ -519,5 +591,13 @@ print("Folder Created:", response.json())
 
 ---
 
-**Last Updated**: 2026-05-14  
-**Version**: 2.1
+**Last Updated**: 2026-05-15  
+**Version**: 2.2
+
+### Changelog v2.2
+
+- Added `response.raise_for_status()` to all API calls for better error handling
+- Added debug logging for folder creation responses
+- Fixed Google Sheets URLs to return clean URLs instead of JSON objects
+- Improved error messages for HTTP and JSON parsing errors
+- Updated documentation with new error handling patterns
