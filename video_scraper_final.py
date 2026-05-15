@@ -430,63 +430,89 @@ def get_or_create_folder_structure(series_name):
         for idx, item in enumerate(folders):
             print(f"      [{idx}] Folder name: '{item.get('name')}', ID: {item.get('fld_id') or item.get('code')}")
         
+        # Try multiple comparison strategies due to potential encoding issues
         for item in folders:
-            folder_name = item.get('name', '').strip()
-            if folder_name == CATEGORY_NAME.strip():
-                category_folder_id = item.get('fld_id') or item.get('code')
-                print(f"📁 Found category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
+            folder_name = item.get('name', '')
+            folder_id = item.get('fld_id') or item.get('code')
+            
+            # Strategy 1: Direct match
+            if folder_name.strip() == CATEGORY_NAME.strip():
+                category_folder_id = folder_id
+                print(f"📁 Found category folder (direct match): {CATEGORY_NAME} (ID: {category_folder_id})")
                 break
+            
+            # Strategy 2: Match without leading/trailing whitespace
+            if folder_name.strip() == CATEGORY_NAME.strip():
+                category_folder_id = folder_id
+                print(f"📁 Found category folder (whitespace normalized): {CATEGORY_NAME} (ID: {category_folder_id})")
+                break
+        
+        # If still not found, try to match by checking if one contains the other
+        if not category_folder_id:
+            for item in folders:
+                folder_name = item.get('name', '')
+                folder_id = item.get('fld_id') or item.get('code')
+                if CATEGORY_NAME.strip() in folder_name or folder_name.strip() in CATEGORY_NAME:
+                    category_folder_id = folder_id
+                    print(f"📁 Found category folder (partial match): '{folder_name}' ~ '{CATEGORY_NAME}' (ID: {category_folder_id})")
+                    break
         
         if not category_folder_id:
             print(f"📁 Creating category folder: {CATEGORY_NAME}")
             # Create folder in root (no parent_id needed)
             create_url = f"https://doodapi.co/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(CATEGORY_NAME)}"
             
-            # Retry up to 3 times for category folder creation
-            for retry in range(3):
-                try:
-                    print(f"   📡 Creating folder (attempt {retry + 1}/3)...")
-                    result = requests.get(create_url, timeout=15).json()
-                    print(f"   📋 Create response: {result}")
+            # Try to create, but handle "already exists" error gracefully
+            try:
+                print(f"   📡 Creating folder...")
+                result = requests.get(create_url, timeout=15).json()
+                print(f"   📋 Create response: {result}")
+                
+                # 15 second delay after create request
+                time.sleep(15)
+                
+                if result and result.get('msg') == 'OK':
+                    res_data = result.get('result', {})
+                    if isinstance(res_data, dict):
+                        category_folder_id = res_data.get('fld_id')
                     
-                    # 15 second delay after create request
-                    time.sleep(15)
-                    
-                    if result and result.get('msg') == 'OK':
-                        res_data = result.get('result', {})
-                        if isinstance(res_data, dict):
-                            category_folder_id = res_data.get('fld_id')
-                        
-                        if category_folder_id:
-                            print(f"✅ Created category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
-                            break
-                    
-                    # If failed, wait a bit before retry
-                    if retry < 2:
-                        print(f"⚠️ Retry {retry + 2}/3 for creating category folder...")
-                        time.sleep(5)
-                except Exception as cat_err:
-                    print(f"⚠️ Create category attempt {retry + 1} failed: {cat_err}")
-                    if retry < 2:
-                        print(f"⚠️ Retry {retry + 2}/3 for creating category folder...")
-                        time.sleep(5)
+                    if category_folder_id:
+                        print(f"✅ Created category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
+                elif result and result.get('msg') == 'Folder name already exists':
+                    # Folder already exists - this is fine! Re-list to get the ID
+                    print(f"ℹ️ Folder already exists, re-listing to get ID...")
+                else:
+                    print(f"⚠️ Unexpected response: {result}")
+            except Exception as cat_err:
+                print(f"⚠️ Create category failed: {cat_err}")
             
+            # Always re-list after creation attempt to get the folder ID
             if not category_folder_id:
-                # Try to find it in the list anyway
                 try:
-                    print(f"   🔍 Re-listing root folders after creation attempts...")
+                    print(f"   🔍 Re-listing root folders after creation attempt...")
                     response = requests.get(list_url, timeout=15)
                     response.raise_for_status()
                     full_response = response.json()
                     print(f"   📋 Full root list response: {full_response}")
                     result_data = full_response.get('result', {})
                     folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+                    
+                    # Use the same matching logic as before
                     for item in folders:
-                        folder_name = item.get('name', '').strip()
-                        if folder_name == CATEGORY_NAME.strip():
-                            category_folder_id = item.get('fld_id') or item.get('code')
+                        folder_name = item.get('name', '')
+                        folder_id = item.get('fld_id') or item.get('code')
+                        
+                        if folder_name.strip() == CATEGORY_NAME.strip():
+                            category_folder_id = folder_id
                             print(f"📁 Found category folder after creation: {CATEGORY_NAME} (ID: {category_folder_id})")
                             break
+                        
+                        # Partial match fallback
+                        if not category_folder_id:
+                            if CATEGORY_NAME.strip() in folder_name or folder_name.strip() in CATEGORY_NAME:
+                                category_folder_id = folder_id
+                                print(f"📁 Found category folder (partial match): '{folder_name}' ~ '{CATEGORY_NAME}' (ID: {category_folder_id})")
+                                break
                 except Exception as recheck_err:
                     print(f"⚠️ Could not re-check folder list: {recheck_err}")
     except Exception as e:
@@ -515,66 +541,83 @@ def get_or_create_folder_structure(series_name):
             for idx, item in enumerate(series_folders):
                 print(f"      [{idx}] Folder name: '{item.get('name')}', ID: {item.get('fld_id') or item.get('code')}")
             
+            # Try multiple comparison strategies due to potential encoding issues
             for item in series_folders:
-                folder_name = item.get('name', '').strip()
-                if folder_name == series_name.strip():
-                    series_folder_id = item.get('fld_id') or item.get('code')
-                    print(f"📁 Found series folder: {series_name} (ID: {series_folder_id})")
+                folder_name = item.get('name', '')
+                folder_id = item.get('fld_id') or item.get('code')
+                
+                # Strategy 1: Direct match
+                if folder_name.strip() == series_name.strip():
+                    series_folder_id = folder_id
+                    print(f"📁 Found series folder (direct match): {series_name} (ID: {series_folder_id})")
                     break
+                
+                # Strategy 2: Partial match
+                if not series_folder_id:
+                    if series_name.strip() in folder_name or folder_name.strip() in series_name:
+                        series_folder_id = folder_id
+                        print(f"📁 Found series folder (partial match): '{folder_name}' ~ '{series_name}' (ID: {series_folder_id})")
+                        break
             
             if not series_folder_id:
                 print(f"📁 Creating series folder: {series_name}")
                 # Create folder inside category folder with parent_id
                 create_url = f"https://doodapi.co/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(series_name)}&parent_id={category_folder_id}"
                 
-                # Retry up to 3 times for series folder creation
-                for retry in range(3):
-                    try:
-                        print(f"   📡 Creating series folder (attempt {retry + 1}/3)...")
-                        result = requests.get(create_url, timeout=15)
-                        result.raise_for_status()
-                        result_json = result.json()
+                # Try to create, but handle "already exists" error gracefully
+                try:
+                    print(f"   📡 Creating series folder...")
+                    result = requests.get(create_url, timeout=15)
+                    result.raise_for_status()
+                    result_json = result.json()
+                    
+                    print(f"   📋 Create folder response: {result_json}")
+                    
+                    # 15 second delay after create request
+                    time.sleep(15)
+                    
+                    if result_json and result_json.get('msg') == 'OK':
+                        res_data = result_json.get('result', {})
+                        if isinstance(res_data, dict):
+                            series_folder_id = res_data.get('fld_id')
                         
-                        print(f"   📋 Create folder response: {result_json}")
-                        
-                        # 15 second delay after create request
-                        time.sleep(15)
-                        
-                        if result_json and result_json.get('msg') == 'OK':
-                            res_data = result_json.get('result', {})
-                            if isinstance(res_data, dict):
-                                series_folder_id = res_data.get('fld_id')
-                            
-                            if series_folder_id:
-                                print(f"✅ Created series folder: {series_name} (ID: {series_folder_id})")
-                                break
-                        
-                        # If failed, wait a bit before retry
-                        if retry < 2:
-                            print(f"⚠️ Retry {retry + 2}/3 for creating series folder...")
-                            time.sleep(5)
-                    except Exception as create_err:
-                        print(f"⚠️ Create folder attempt {retry + 1} failed: {create_err}")
-                        if retry < 2:
-                            print(f"⚠️ Retry {retry + 2}/3 for creating series folder...")
-                            time.sleep(5)
+                        if series_folder_id:
+                            print(f"✅ Created series folder: {series_name} (ID: {series_folder_id})")
+                    elif result_json and result_json.get('msg') == 'Folder name already exists':
+                        # Folder already exists - this is fine! Re-list to get the ID
+                        print(f"ℹ️ Series folder already exists, re-listing to get ID...")
+                    else:
+                        print(f"⚠️ Unexpected response: {result_json}")
+                except Exception as create_err:
+                    print(f"⚠️ Create series folder failed: {create_err}")
                 
+                # Always re-list after creation attempt to get the folder ID
                 if not series_folder_id:
-                    # Try to find it anyway after all retries
                     try:
-                        print(f"   🔍 Re-listing category folders after creation attempts...")
+                        print(f"   🔍 Re-listing category folders after creation attempt...")
                         response = requests.get(list_url, timeout=15)
                         response.raise_for_status()
                         full_response = response.json()
                         print(f"   📋 Full category list response: {full_response}")
                         result_data = full_response.get('result', {})
                         series_folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+                        
+                        # Use the same matching logic as before
                         for item in series_folders:
-                            folder_name = item.get('name', '').strip()
-                            if folder_name == series_name.strip():
-                                series_folder_id = item.get('fld_id') or item.get('code')
+                            folder_name = item.get('name', '')
+                            folder_id = item.get('fld_id') or item.get('code')
+                            
+                            if folder_name.strip() == series_name.strip():
+                                series_folder_id = folder_id
                                 print(f"📁 Found series folder after creation: {series_name} (ID: {series_folder_id})")
                                 break
+                            
+                            # Partial match fallback
+                            if not series_folder_id:
+                                if series_name.strip() in folder_name or folder_name.strip() in series_name:
+                                    series_folder_id = folder_id
+                                    print(f"📁 Found series folder (partial match): '{folder_name}' ~ '{series_name}' (ID: {series_folder_id})")
+                                    break
                     except Exception as recheck_err:
                         print(f"⚠️ Could not re-check folder list: {recheck_err}")
         except Exception as e:
