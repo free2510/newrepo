@@ -203,6 +203,13 @@ DoodStream/
         └── مسلسل حكاية نرجس الحلقة 7 السابعة.mp4 (Video)
 ```
 
+**API Endpoints Used**:
+- `https://doodapi.com/api/upload` - Upload file
+- `https://doodapi.com/api/file/rename` - Rename file  
+- `https://doodapi.com/api/list_folders` - List folders
+- `https://doodapi.com/api/folder/create` - Create folder
+- `https://doodapi.com/api/file/move` - Move file to folder
+
 ---
 
 ### Step 2d: Update Google Sheet

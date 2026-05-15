@@ -112,7 +112,9 @@ def create_folder(name, parent_id=None, api_key=None):
         params["parent"] = parent_id
     
     response = requests.get(url, params=params)
-    response.raise_for_status()  # Raise error on HTTP failures
+
+
+response.raise_for_status()  # Raise error on HTTP failures
     result = response.json()
     
     print(f"Create folder response: {result}")  # Debug logging
