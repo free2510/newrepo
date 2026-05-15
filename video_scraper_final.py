@@ -70,6 +70,9 @@ PROCESSED_FILE = "/content/processed_videos.json"
 # Track which videos we've already created rows for in this session
 session_processed_rows = set()
 
+# Cache for DoodStream folder IDs to avoid recreating folders for same series
+folder_cache = {}  # {series_name: (category_folder_id, series_folder_id)}
+
 # ==================== INITIALIZATION ====================
 print("=" * 60)
 print("🚀 Video Processing Pipeline - REAL-TIME UPDATES")
@@ -396,6 +399,14 @@ def get_or_create_folder_structure(series_name):
     
     IMPORTANT: 15 second delay required between API requests per DoodStream API docs
     """
+    global folder_cache
+    
+    # Check cache first - if we already created this series folder, return cached IDs
+    if series_name in folder_cache:
+        cat_id, series_id = folder_cache[series_name]
+        print(f"📁 Using cached folder structure for: {series_name}")
+        print(f"   Category ID: {cat_id}, Series ID: {series_id}")
+        return cat_id, series_id
     
     # Step 1: Find or create Category folder in root
     category_folder_id = None
@@ -507,6 +518,11 @@ def get_or_create_folder_structure(series_name):
                         pass
         except Exception as e:
             print(f"⚠️ Series folder error: {e}")
+    
+    # Cache the folder IDs for future use (even if one is None, cache it)
+    if category_folder_id and series_folder_id:
+        folder_cache[series_name] = (category_folder_id, series_folder_id)
+        print(f"💾 Cached folder structure: {series_name} -> Cat:{category_folder_id}, Series:{series_folder_id}")
     
     return category_folder_id, series_folder_id
 
@@ -652,8 +668,8 @@ def upload_to_doodstream(file_path, series_name, video_title):
 def get_doodstream_links(file_code):
     """Get watch and download links from DoodStream - returns clean URLs only"""
     # Construct clean URLs directly without using library that returns JSON
-    watch_link = f"https://doodstream.com/d/{file_code}"
-    dl_link = f"https://doodstream.com/download/{file_code}"
+    watch_link = f"https://dsvplay.com/e/{file_code}"
+    dl_link = f"https://dsvplay.com/d/{file_code}"
     
     return {
         'file_code': file_code,
@@ -895,8 +911,8 @@ def process_video(video_info, index, total):
     save_processed_video(video_info['video_id'])
     
     print(f"   🎉 COMPLETED!")
-    print(f"   📺 Watch: {links['watch_link']}")
-    print(f"   ⬇️ Download: {links['download_link']}")
+    print(f"   📺 Watch: https://dsvplay.com/e/{file_code}")
+    print(f"   ⬇️ Download: https://dsvplay.com/d/{file_code}")
     
     return True
 
