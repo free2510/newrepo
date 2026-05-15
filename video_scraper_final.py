@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Video Scraper & Uploader - Final Version
-Scrapes videos from larozaa.yachts, uploads to DoodStream with organized folders,
+Scrapes videos from larozaa.living, uploads to DoodStream with organized folders,
 and updates Google Sheets in REAL-TIME after each video.
 
 Folder Structure on DoodStream:
@@ -23,22 +23,31 @@ API Endpoints Used (per https://doodstream.com/api-docs):
 - File Clone: GET https://doodapi.co/api/file/clone?key={key}&file_code={code}&fld_id={folder_id}
   Response: {"msg": "OK"}
 
-Key Changes (Latest Update - v4.0):
-1. Added 15-second delays between ALL API requests (per DoodStream API docs requirement)
-2. Fixed API endpoints from doodapi.com to doodapi.co (correct domain)
-3. Updated folder list API to use /api/folder/list instead of /api/list_folders
-4. Updated response parsing to handle {"result": {"folders": [...]}} structure
-5. Changed folder create parameter from 'parent' to 'parent_id' (correct API param)
-6. Added strict folder structure requirement - upload aborts if folders can't be created
-7. Added cleanup logic to delete files if they can't be moved to correct folder
+Key Changes (Latest Update - v5.0):
+1. Changed source website from larozaa.yachts to larozaa.living
+2. Updated video page URL format to video.php?vid=XXX
+3. Added scraping of video description and keywords from video pages
+4. Added Description and Keywords columns to Google Sheet
+5. Added 15-second delays between ALL API requests (per DoodStream API docs requirement)
+6. Fixed API endpoints from doodapi.com to doodapi.co (correct domain)
+7. Updated folder list API to use /api/folder/list instead of /api/list_folders
+8. Updated response parsing to handle {"result": {"folders": [...]}} structure
+9. Changed folder create parameter from 'parent' to 'parent_id' (correct API param)
+10. Added strict folder structure requirement - upload aborts if folders can't be created
+11. Added cleanup logic to delete files if they can't be moved to correct folder
+
+Scraped Data from larozaa.living/video.php:
+- Description: From <div class="pm-video-description"><div itemprop="description">...</div></div>
+- Keywords: From <div class="video-tags-wrap"><a href="...">keyword</a>, ...</div>
 
 Workflow with Rate Limiting:
-1. Create Category Folder → Wait 15s
-2. Create Series Folder → Wait 15s
-3. Upload Video → Wait 15s
-4. Rename File → Wait 15s
-5. Move to Folder → Wait 15s
-6. Complete
+1. Scrape video details (description & keywords) → Wait 15s
+2. Create Category Folder → Wait 15s
+3. Create Series Folder → Wait 15s
+4. Upload Video → Wait 15s
+5. Rename File → Wait 15s
+6. Move to Folder → Wait 15s
+7. Complete
 """
 
 import os
@@ -60,7 +69,8 @@ from googleapiclient.http import MediaFileUpload
 from doodstream import DoodStream
 
 # ==================== CONFIGURATION ====================
-CATEGORY_URL = "https://larozaa.yachts/category.php?cat=ramadan-2026"
+CATEGORY_URL = "https://larozaa.living/category.php?cat=ramadan-2026"
+VIDEO_BASE_URL = "https://larozaa.living/video.php?vid="
 DOODSTREAM_API_KEY = "566462d6434dlvqu6fmesc"
 GOOGLE_SHEET_ID = "1Bpvo9v6san0VsD6Y1vW26UlxYWpWDqWFVbFga-Cczjg"
 CATEGORY_NAME = "رمضان 2026 - مسلسلات"
@@ -156,12 +166,12 @@ def init_sheet():
         values = result.get('values', [])
         
         if not values or not values[0]:
-            # Add headers
+            # Add headers with Description and Keywords columns
             headers = [['Timestamp', 'Title', 'Video ID', 'Watch Link', 'Series Name', 
-                       'Category', 'DoodStream Watch', 'DoodStream Download', 'Status']]
+                       'Category', 'DoodStream Watch', 'DoodStream Download', 'Description', 'Keywords', 'Status']]
             sheet.values().update(
                 spreadsheetId=GOOGLE_SHEET_ID,
-                range='Sheet1!A1:I1',
+                range='Sheet1!A1:K1',
                 valueInputOption='RAW',
                 body={'values': headers}
             ).execute()
@@ -273,7 +283,7 @@ def scrape_category_videos(url):
             videos.append({
                 'title': title,
                 'video_id': video_id,
-                'watch_page_url': f"https://larozaa.yachts/play.php?vid={video_id}",
+                'watch_page_url': f"https://larozaa.living/video.php?vid={video_id}",
                 'url': video_url
             })
         except Exception as e:
@@ -306,6 +316,45 @@ def get_watch_servers(play_url):
             })
     
     return servers
+
+def scrape_video_details(video_page_url):
+    """Scrape description and keywords from video page (larozaa.living/video.php?vid=XXX)"""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(video_page_url, headers=headers, timeout=30)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        result = {
+            'description': '',
+            'keywords': ''
+        }
+        
+        # Scrape description - XPath: /html/body/div[1]/div[2]/div[6]/div/div/div[1]/div[4]
+        # Element shape: <div class="pm-video-description"><div itemprop="description">...</div></div>
+        desc_div = soup.find('div', class_='pm-video-description')
+        if desc_div:
+            inner_desc = desc_div.find('div', itemprop='description')
+            if inner_desc:
+                # Get the full HTML content and clean it
+                description_html = inner_desc.decode_contents()
+                if description_html:
+                    # Clean up the HTML - remove extra whitespace but keep basic formatting
+                    result['description'] = description_html.strip()
+        
+        # Scrape keywords - XPath: /html/body/div[1]/div[2]/div[6]/div/div/div[1]/div[5]/div[4]
+        # Element shape: <div class="video-info-line video-tags-line">...<div class="video-tags-wrap">...</div></div>
+        tags_line = soup.find('div', class_='video-tags-wrap')
+        if tags_line:
+            # Extract all tag links
+            tag_links = tags_line.find_all('a')
+            keywords_list = [tag.get_text(strip=True) for tag in tag_links]
+            result['keywords'] = ', '.join(keywords_list)
+        
+        return result
+        
+    except Exception as e:
+        print(f"   ⚠️ Error scraping details: {e}")
+        return {'description': '', 'keywords': ''}
 
 def extract_video_url(server_url):
     """Extract direct video URL from server embed page"""
@@ -820,7 +869,7 @@ def get_existing_video_row(video_id):
         # Get all data from sheet
         result = sheet.values().get(
             spreadsheetId=GOOGLE_SHEET_ID,
-            range='Sheet1!A:I'
+            range='Sheet1!A:K'
         ).execute()
         
         values = result.get('values', [])
@@ -865,12 +914,14 @@ def update_sheet_realtime(video_data, status="Processing", is_final=False):
                 video_data.get('category', CATEGORY_NAME),
                 video_data.get('dood_watch', ''),
                 video_data.get('dood_download', ''),
+                video_data.get('description', ''),
+                video_data.get('keywords', ''),
                 status
             ]
             
             if existing_row:
                 # Update existing row instead of creating duplicate
-                range_name = f'Sheet1!A{existing_row}:I{existing_row}'
+                range_name = f'Sheet1!A{existing_row}:K{existing_row}'
                 sheet.values().update(
                     spreadsheetId=GOOGLE_SHEET_ID,
                     range=range_name,
@@ -886,7 +937,7 @@ def update_sheet_realtime(video_data, status="Processing", is_final=False):
                 
                 sheet.values().append(
                     spreadsheetId=GOOGLE_SHEET_ID,
-                    range='Sheet1!A:I',
+                    range='Sheet1!A:K',
                     valueInputOption='RAW',
                     insertDataOption='INSERT_ROWS',
                     body={'values': [row_data]}
@@ -938,13 +989,25 @@ def process_video(video_info, index, total):
         'series_name': extract_series_name(video_info['title']),
         'category': CATEGORY_NAME,
         'dood_watch': '',
-        'dood_download': ''
+        'dood_download': '',
+        'description': '',
+        'keywords': ''
     }
     
     # Update sheet: Starting
     update_sheet_realtime(video_data, status="⏳ Starting")
     
-    # Step 1: Get watch servers
+    # Step 1: Scrape video details (description and keywords) from larozaa.living/video.php?vid=XXX
+    print("   📝 Scraping video details (description & keywords)...")
+    details = scrape_video_details(video_info['watch_page_url'])
+    video_data['description'] = details.get('description', '')
+    video_data['keywords'] = details.get('keywords', '')
+    if video_data['description']:
+        print(f"   ✅ Description scraped ({len(video_data['description'])} chars)")
+    if video_data['keywords']:
+        print(f"   ✅ Keywords scraped: {video_data['keywords'][:50]}...")
+    
+    # Step 2: Get watch servers
     print("   🔍 Getting watch servers...")
     servers = get_watch_servers(video_info['watch_page_url'])
     print(f"   📺 Found {len(servers)} servers")
@@ -953,7 +1016,7 @@ def process_video(video_info, index, total):
         update_sheet_realtime(video_data, status="❌ No servers found")
         return False
     
-    # Step 2: Try servers until we find working video URL
+    # Step 3: Try servers until we find working video URL
     video_url = None
     for idx, server in enumerate(servers, 1):
         print(f"   🧪 Testing server {idx}/{len(servers)}: {server['name']}")
@@ -971,7 +1034,7 @@ def process_video(video_info, index, total):
         update_sheet_realtime(video_data, status="❌ No working server")
         return False
     
-    # Step 3: Download video to local temp folder (NOT Google Drive)
+    # Step 4: Download video to local temp folder (NOT Google Drive)
     safe_filename = f"{video_info['video_id']}_{video_data['series_name']}.mp4"
     safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in (' ', '.', '_')).strip()
     safe_filename = safe_filename.replace(' ', '_')[:100] + ".mp4"
@@ -983,7 +1046,7 @@ def process_video(video_info, index, total):
         update_sheet_realtime(video_data, status="❌ Download failed")
         return False
     
-    # Step 4: Upload to DoodStream (directly from local temp file)
+    # Step 5: Upload to DoodStream (directly from local temp file)
     print(f"   ⬆️ Uploading to DoodStream...")
     upload_result = upload_to_doodstream(
         downloaded_path, 
@@ -1056,7 +1119,9 @@ def main():
                 'video_id': video['video_id'],
                 'series_name': extract_series_name(video['title']),
                 'dood_watch': '',
-                'dood_download': ''
+                'dood_download': '',
+                'description': '',
+                'keywords': ''
             }
             update_sheet_realtime(video_data, status=f"❌ Error: {str(e)[:50]}")
     
