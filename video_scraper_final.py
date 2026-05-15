@@ -414,16 +414,25 @@ def get_or_create_folder_structure(series_name):
         # List folders in root (fld_id parameter is required, use empty or omit for root)
         list_url = f"https://doodapi.co/api/folder/list?key={DOODSTREAM_API_KEY}"
         try:
-            response = requests.get(list_url, timeout=10)
+            print(f"   🔍 Listing root folders to find: {CATEGORY_NAME}")
+            response = requests.get(list_url, timeout=15)
             response.raise_for_status()
-            result_data = response.json().get('result', {})
+            full_response = response.json()
+            print(f"   📋 Full root list response: {full_response}")
+            result_data = full_response.get('result', {})
             folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+            print(f"   📁 Found {len(folders)} folders in root")
         except Exception as list_err:
             print(f"⚠️ List folders API error: {list_err}")
             folders = []
         
+        # Debug: Print all folder names
+        for idx, item in enumerate(folders):
+            print(f"      [{idx}] Folder name: '{item.get('name')}', ID: {item.get('fld_id') or item.get('code')}")
+        
         for item in folders:
-            if item.get('name') == CATEGORY_NAME:
+            folder_name = item.get('name', '').strip()
+            if folder_name == CATEGORY_NAME.strip():
                 category_folder_id = item.get('fld_id') or item.get('code')
                 print(f"📁 Found category folder: {CATEGORY_NAME} (ID: {category_folder_id})")
                 break
@@ -436,7 +445,9 @@ def get_or_create_folder_structure(series_name):
             # Retry up to 3 times for category folder creation
             for retry in range(3):
                 try:
+                    print(f"   📡 Creating folder (attempt {retry + 1}/3)...")
                     result = requests.get(create_url, timeout=15).json()
+                    print(f"   📋 Create response: {result}")
                     
                     # 15 second delay after create request
                     time.sleep(15)
@@ -463,17 +474,21 @@ def get_or_create_folder_structure(series_name):
             if not category_folder_id:
                 # Try to find it in the list anyway
                 try:
-                    response = requests.get(list_url, timeout=10)
+                    print(f"   🔍 Re-listing root folders after creation attempts...")
+                    response = requests.get(list_url, timeout=15)
                     response.raise_for_status()
-                    result_data = response.json().get('result', {})
+                    full_response = response.json()
+                    print(f"   📋 Full root list response: {full_response}")
+                    result_data = full_response.get('result', {})
                     folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
                     for item in folders:
-                        if item.get('name') == CATEGORY_NAME:
+                        folder_name = item.get('name', '').strip()
+                        if folder_name == CATEGORY_NAME.strip():
                             category_folder_id = item.get('fld_id') or item.get('code')
                             print(f"📁 Found category folder after creation: {CATEGORY_NAME} (ID: {category_folder_id})")
                             break
-                except:
-                    pass
+                except Exception as recheck_err:
+                    print(f"⚠️ Could not re-check folder list: {recheck_err}")
     except Exception as e:
         print(f"⚠️ Category folder error: {e}")
     
@@ -484,16 +499,25 @@ def get_or_create_folder_structure(series_name):
             # List files/folders in category folder
             list_url = f"https://doodapi.co/api/folder/list?key={DOODSTREAM_API_KEY}&fld_id={category_folder_id}"
             try:
-                response = requests.get(list_url, timeout=10)
+                print(f"   🔍 Listing folders in category '{CATEGORY_NAME}' to find: {series_name}")
+                response = requests.get(list_url, timeout=15)
                 response.raise_for_status()
-                result_data = response.json().get('result', {})
+                full_response = response.json()
+                print(f"   📋 Full category list response: {full_response}")
+                result_data = full_response.get('result', {})
                 series_folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
+                print(f"   📁 Found {len(series_folders)} folders in category")
             except Exception as list_err:
                 print(f"⚠️ List series folders API error: {list_err}")
                 series_folders = []
             
+            # Debug: Print all folder names in category
+            for idx, item in enumerate(series_folders):
+                print(f"      [{idx}] Folder name: '{item.get('name')}', ID: {item.get('fld_id') or item.get('code')}")
+            
             for item in series_folders:
-                if item.get('name') == series_name:
+                folder_name = item.get('name', '').strip()
+                if folder_name == series_name.strip():
                     series_folder_id = item.get('fld_id') or item.get('code')
                     print(f"📁 Found series folder: {series_name} (ID: {series_folder_id})")
                     break
@@ -506,14 +530,15 @@ def get_or_create_folder_structure(series_name):
                 # Retry up to 3 times for series folder creation
                 for retry in range(3):
                     try:
+                        print(f"   📡 Creating series folder (attempt {retry + 1}/3)...")
                         result = requests.get(create_url, timeout=15)
                         result.raise_for_status()
                         result_json = result.json()
                         
+                        print(f"   📋 Create folder response: {result_json}")
+                        
                         # 15 second delay after create request
                         time.sleep(15)
-                        
-                        print(f"   📋 Create folder response: {result_json}")
                         
                         if result_json and result_json.get('msg') == 'OK':
                             res_data = result_json.get('result', {})
@@ -537,17 +562,21 @@ def get_or_create_folder_structure(series_name):
                 if not series_folder_id:
                     # Try to find it anyway after all retries
                     try:
-                        response = requests.get(list_url, timeout=10)
+                        print(f"   🔍 Re-listing category folders after creation attempts...")
+                        response = requests.get(list_url, timeout=15)
                         response.raise_for_status()
-                        result_data = response.json().get('result', {})
+                        full_response = response.json()
+                        print(f"   📋 Full category list response: {full_response}")
+                        result_data = full_response.get('result', {})
                         series_folders = result_data.get('folders', []) if isinstance(result_data, dict) else []
                         for item in series_folders:
-                            if item.get('name') == series_name:
+                            folder_name = item.get('name', '').strip()
+                            if folder_name == series_name.strip():
                                 series_folder_id = item.get('fld_id') or item.get('code')
                                 print(f"📁 Found series folder after creation: {series_name} (ID: {series_folder_id})")
                                 break
-                    except:
-                        pass
+                    except Exception as recheck_err:
+                        print(f"⚠️ Could not re-check folder list: {recheck_err}")
         except Exception as e:
             print(f"⚠️ Series folder error: {e}")
     
