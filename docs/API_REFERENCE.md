@@ -13,7 +13,7 @@ The script uses the official [DoodStream API](https://doodstream.com/api-docs) t
 - Move files to folders
 - List existing folders
 
-**Base URL**: `https://doodapi.com/api`  
+**Base URL**: `https://doodapi.co/api`  (Updated from doodapi.com)  
 **Authentication**: API Key via query parameter `?key=YOUR_API_KEY`
 
 ---
@@ -22,47 +22,55 @@ The script uses the official [DoodStream API](https://doodstream.com/api-docs) t
 
 ### 1. List Folders
 
-**Endpoint**: `/api/list_folders`  
+**Endpoint**: `/api/folder/list`  (Updated from /api/list_folders)  
 **Method**: GET  
 **Purpose**: List all folders/files in root or specific folder
 
 **Request (Root)**:
 ```
-GET https://doodapi.com/api/list_folders?key=YOUR_API_KEY
+GET https://doodapi.co/api/folder/list?key=YOUR_API_KEY
 ```
 
 **Request (Specific Folder)**:
 ```
-GET https://doodapi.com/api/list_folders?key=YOUR_API_KEY&fld_id=FOLDER_ID
+GET https://doodapi.co/api/folder/list?key=YOUR_API_KEY&fld_id=FOLDER_ID
 ```
 
 **Parameters**:
 - `key`: Your API key
-- `fld_id`: (Optional) Folder ID to list contents of
+- `fld_id`: (Optional) Folder ID to list contents of. If omitted, lists root folders.
 
 **Response**:
 ```json
 {
   "msg": "OK",
   "status": 200,
-  "result": [
-    {
-      "id": "folder123",
-      "name": "Folder Name",
-      "is_folder": true
-    },
-    {
-      "id": "file456",
-      "name": "video.mp4",
-      "is_folder": false
-    }
-  ]
+  "result": {
+    "folders": [
+      {
+        "name": "Folder Name",
+        "code": "xyz789",
+        "fld_id": "123"
+      }
+    ],
+    "files": [
+      {
+        "name": "video.mp4",
+        "filecode": "abc123",
+        "download_url": "https://dood.to/d/abc123"
+      }
+    ]
+  }
 }
 ```
 
 **Used in Script**: `get_or_create_folder_structure()` - Check if category/series folders exist
 
-**Error Handling**: Added `response.raise_for_status()` to catch HTTP errors and prevent JSON parsing errors on empty responses.
+**Important Notes**:
+- Response structure is `{"result": {"folders": [...], "files": [...]}}` NOT a flat array
+- Folder IDs are in `fld_id` field (not `id`)
+- Folder codes are in `code` field (not `foldercode`)
+- Use either `fld_id` or `code` for folder operations
 
 ---
 
@@ -74,13 +82,13 @@ GET https://doodapi.com/api/list_folders?key=YOUR_API_KEY&fld_id=FOLDER_ID
 
 **Request**:
 ```
-GET https://doodapi.com/api/folder/create?key=YOUR_API_KEY&name=FOLDER_NAME&parent=PARENT_ID
+GET https://doodapi.co/api/folder/create?key=YOUR_API_KEY&name=FOLDER_NAME&parent_id=PARENT_ID
 ```
 
 **Parameters**:
 - `key`: Your API key
-- `name`: Folder name (URL-encoded for Arabic support)
-- `parent`: (Optional) Parent folder ID for nested folders
+- `name`: Folder name (URL-encoded for Arabic support) - **Required**
+- `parent_id`: (Optional) Parent folder ID for nested folders. Omit for root-level folders.
 
 **Response**:
 ```json
@@ -88,48 +96,14 @@ GET https://doodapi.com/api/folder/create?key=YOUR_API_KEY&name=FOLDER_NAME&pare
   "msg": "OK",
   "status": 200,
   "result": {
-    "foldercode": "xyz789abc",
-    "name": "Folder Name",
-    "parent": "parent_id_or_null"
+    "fld_id": "1234567"
   }
 }
 ```
 
-**Note**: If folder already exists, may return existing folder code
+**Note**: The response contains `fld_id` directly in the result object.
 
 **Used in Script**: `get_or_create_folder_structure()` - Create category and series folders
-
-**Implementation**:
-```python
-import requests
-from urllib.parse import quote
-
-def create_folder(name, parent_id=None, api_key=None):
-    url = f"https://doodapi.com/api/folder/create?key={api_key}"
-    params = {"name": quote(name)}  # URL-encode for Arabic
-    
-    if parent_id:
-        params["parent"] = parent_id
-    
-    response = requests.get(url, params=params)
-
-
-response.raise_for_status()  # Raise error on HTTP failures
-    result = response.json()
-    
-    print(f"Create folder response: {result}")  # Debug logging
-    
-    # Extract folder code from response
-    if 'result' in result:
-        folder_data = result['result']
-        if isinstance(folder_data, list) and len(folder_data) > 0:
-            folder_code = folder_data[0].get('foldercode') or folder_data[0].get('id')
-        elif isinstance(folder_data, dict):
-            folder_code = folder_data.get('foldercode') or folder_data.get('id')
-        return folder_code
-    
-    return None
-```
 
 ---
 
@@ -141,7 +115,7 @@ response.raise_for_status()  # Raise error on HTTP failures
 
 **Request**:
 ```
-POST https://doodapi.com/api/upload?key=YOUR_API_KEY
+POST https://doodapi.co/api/upload?key=YOUR_API_KEY
 Content-Type: multipart/form-data
 
 file: [binary video file]
@@ -162,10 +136,6 @@ file: [binary video file]
 }
 ```
 
-**Note**: Response can be:
-- **List**: `{"result": [{...}]}` - Most common
-- **Dict**: `{"result": {...}}` - Sometimes returned
-
 **Used in Script**: `upload_to_doodstream()` function via `dood.local_upload()`
 
 ---
@@ -178,7 +148,7 @@ file: [binary video file]
 
 **Request**:
 ```
-GET https://doodapi.com/api/file/rename?key=YOUR_API_KEY&file_code=FILECODE&title=NEW_TITLE
+GET https://doodapi.co/api/file/rename?key=YOUR_API_KEY&file_code=FILECODE&title=NEW_TITLE
 ```
 
 **Parameters**:
@@ -196,30 +166,6 @@ GET https://doodapi.com/api/file/rename?key=YOUR_API_KEY&file_code=FILECODE&titl
 
 **Used in Script**: After upload, before moving to folder
 
-**Important Notes**:
-- Wait 1-2 seconds after upload before renaming
-- Title MUST be URL-encoded for Arabic characters
-- Use `requests.utils.quote(title)` for encoding
-
-**Implementation**:
-```python
-import requests
-from urllib.parse import quote
-import time
-
-def rename_file(filecode, new_title, api_key):
-    # Wait for upload to process
-    time.sleep(2)
-    
-    url = f"https://doodapi.com/api/file/rename?key={api_key}"
-    params = {
-        "file_code": filecode,
-        "title": quote(new_title)  # URL-encode for Arabic
-    }
-    response = requests.get(url, params=params)
-    return response.json()
-```
-
 ---
 
 ### 5. Move File to Folder
@@ -230,7 +176,7 @@ def rename_file(filecode, new_title, api_key):
 
 **Request**:
 ```
-GET https://doodapi.com/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id=FOLDER_ID
+GET https://doodapi.co/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id=FOLDER_ID
 ```
 
 **Parameters**:
@@ -248,151 +194,6 @@ GET https://doodapi.com/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id
 
 **Used in Script**: After rename, move to Category/Series folder
 
-**Implementation**:
-```python
-import requests
-
-def move_to_folder(filecode, folder_id, api_key):
-    url = f"https://doodapi.com/api/file/move?key={api_key}"
-    params = {
-        "file_code": filecode,
-        "fld_id": folder_id
-    }
-    response = requests.get(url, params=params)
-    return response.json()
-```
-
-**Fallback Method**: If move fails, use clone + delete:
-```python
-# Clone to folder
-copy_url = f"https://doodapi.com/api/file/clone?key={api_key}&file_code={filecode}&fld_id={folder_id}"
-copy_resp = requests.get(copy_url).json()
-
-if copy_resp.get('msg') == 'OK':
-    # Delete original from root
-    dood.delete_file([filecode])
-```
-
----
-
-## Complete Upload Flow
-
-```python
-import requests
-from urllib.parse import quote
-import time
-
-def complete_upload_flow(file_path, category_name, series_name, video_title, api_key):
-    """
-    Complete workflow for uploading video to DoodStream with folder structure
-    """
-    
-    # Step 1: Upload file to root
-    print("Uploading file...")
-    upload_url = f"https://doodapi.com/api/upload?key={api_key}"
-    files = {"file": open(file_path, "rb")}
-    upload_response = requests.post(upload_url, files=files).json()
-    
-    # Extract filecode (handle both list and dict)
-    result = upload_response.get('result')
-    if isinstance(result, list):
-        filecode = result[0]['filecode']
-    elif isinstance(result, dict):
-        filecode = result.get('filecode') or result.get('id')
-    else:
-        raise Exception("Unexpected upload response")
-    
-    print(f"Uploaded! Filecode: {filecode}")
-    
-    # Step 2: Rename file (URL-encode Arabic title)
-    print("Renaming file...")
-    time.sleep(2)  # Wait for upload to process
-    rename_url = f"https://doodapi.com/api/file/rename?key={api_key}"
-    rename_params = {"file_code": filecode, "title": quote(video_title)}
-    rename_response = requests.get(rename_url, params=rename_params).json()
-    
-    if rename_response.get('msg') != 'OK':
-        print(f"Warning: Rename may have failed: {rename_response}")
-    
-    # Step 3: Get or create category folder
-    print(f"Getting/creating category folder: {category_name}")
-    category_id = get_or_create_folder(category_name, None, api_key)
-    time.sleep(1)  # Rate limiting
-    
-    # Step 4: Get or create series folder inside category
-    print(f"Getting/creating series folder: {series_name}")
-    series_id = get_or_create_folder(series_name, category_id, api_key)
-    time.sleep(1)  # Rate limiting
-    
-    # Step 5: Move file to series folder
-    print("Moving file to folder...")
-    move_url = f"https://doodapi.com/api/file/move?key={api_key}"
-    move_params = {"file_code": filecode, "fld_id": series_id}
-    move_response = requests.get(move_url, params=move_params).json()
-    
-    if move_response.get('msg') != 'OK':
-        print(f"Move failed, trying fallback: {move_response}")
-        # Fallback: clone + delete
-        copy_url = f"https://doodapi.com/api/file/clone?key={api_key}&file_code={filecode}&fld_id={series_id}"
-        copy_resp = requests.get(copy_url).json()
-        if copy_resp.get('msg') == 'OK':
-            print("Copied to folder (fallback method)")
-            # Delete original would go here
-    
-    # Step 6: Get final URLs
-    watch_url = f"https://dsvplay.com/e/{filecode}"
-    download_url = f"https://dsvplay.com/d/{filecode}"
-    
-    return {
-        "filecode": filecode,
-        "watch_url": watch_url,
-        "download_url": download_url,
-        "category": category_name,
-        "series": series_name
-    }
-
-
-def get_or_create_folder(name, parent_id, api_key):
-    """Helper function to get existing folder or create new one"""
-    # First, try to list folders to see if it exists
-    list_url = f"https://doodapi.com/api/list_folders?key={api_key}"
-    if parent_id:
-        list_url += f"&fld_id={parent_id}"
-    
-    response = requests.get(list_url)
-    response.raise_for_status()  # Catch HTTP errors
-    files = response.json().get('result', [])
-    
-    # Check if folder already exists
-    for item in files:
-        if item.get('name') == name and item.get('is_folder'):
-            return item.get('id') or item.get('foldercode')
-    
-    # Folder doesn't exist, create it
-    create_url = f"https://doodapi.com/api/folder/create?key={api_key}"
-    params = {"name": quote(name)}
-    if parent_id:
-        params["parent"] = parent_id
-    
-    response = requests.get(create_url, params=params)
-    response.raise_for_status()
-    result = response.json()
-    
-    print(f"Create folder response: {result}")  # Debug logging
-    
-    # Handle different response formats
-    if isinstance(result, list) and len(result) > 0:
-        data = result[0]
-    elif isinstance(result, dict):
-        data = result
-    else:
-        raise Exception(f"Unexpected folder response: {response}")
-    
-    # Extract folder code (can be 'foldercode' or 'id')
-    folder_code = data.get('foldercode') or data.get('id')
-    return folder_code
-```
-
 ---
 
 ## Error Handling
@@ -404,197 +205,32 @@ def get_or_create_folder(name, parent_id, api_key):
 | 400 | Invalid parameters | Check filecode, fld_id, title encoding |
 | 401 | Invalid API key | Verify API key in dashboard |
 | 403 | Permission denied | Check API access enabled |
+| 404 | Not Found | Wrong endpoint (use doodapi.co not doodapi.com) |
 | 429 | Rate limited | Add delays between requests (1-2 seconds) |
 | 500 | Server error | Retry after delay |
-
-### Response Format Variations
-
-The DoodStream API can return different formats:
-
-**Format 1 - List** (most common):
-```json
-{
-  "msg": "OK",
-  "status": 200,
-  "result": [{"filecode": "abc123"}]
-}
-```
-
-**Format 2 - Dict**:
-```json
-{
-  "msg": "OK",
-  "status": 200,
-  "result": {"filecode": "abc123"}
-}
-```
-
-**Script handles all formats**:
-```python
-def extract_code(response):
-    result = response.get('result')
-    
-    if isinstance(result, list) and len(result) > 0:
-        item = result[0]
-        if isinstance(item, dict):
-            return item.get('filecode') or item.get('foldercode') or item.get('id')
-    elif isinstance(result, dict):
-        return result.get('filecode') or result.get('foldercode') or result.get('id')
-    
-    return None
-```
-
-### HTTP Error Handling
-
-Added `response.raise_for_status()` to catch HTTP errors before attempting JSON parsing:
-
-```python
-try:
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()  # Raise exception for 4xx/5xx errors
-    data = response.json().get('result', [])
-except requests.exceptions.HTTPError as e:
-    print(f"HTTP error: {e}")
-    print(f"Response content: {response.text}")
-    data = []
-except json.JSONDecodeError as e:
-    print(f"JSON decode error: {e}")
-    print(f"Response content: {response.text}")
-    data = []
-```
-
-This prevents errors like "Expecting value: line 1 column 1 (char 0)" when the API returns an empty response or error page.
-
----
-
-## Rate Limiting
-
-### Best Practices
-
-1. **Wait between API calls**:
-   - Upload → Rename: 2 seconds
-   - Between folder operations: 1 second
-   - Between uploads: 1-2 seconds
-
-2. **Batch processing**:
-   - Process 5-10 videos at a time
-   - Wait 5-10 seconds between batches
-
-3. **Retry logic**:
-   ```python
-   import time
-   
-   def upload_with_retry(file_path, api_key, max_retries=2):
-       for attempt in range(max_retries):
-           try:
-               return upload_file(file_path, api_key)
-           except Exception as e:
-               if attempt < max_retries - 1:
-                   print(f"Upload failed, retrying in 5s...")
-                   time.sleep(5)
-               else:
-                   raise
-   ```
-
----
-
-## URL Encoding for Arabic Titles
-
-Arabic titles must be URL-encoded for API calls:
-
-```python
-from urllib.parse import quote
-
-arabic_title = "مسلسل حكاية نرجس الحلقة 7 السابعة"
-encoded_title = quote(arabic_title)
-# Result: %D9%85%D8%B3%D9%84%D8%B3%D9%84%20%D8%AD%D9%83%D8%A7%D9%8A%D8%A9...
-
-# Use in API call
-rename_url = f"https://doodapi.com/api/file/rename?key={api_key}&file_code={filecode}&title={encoded_title}"
-```
-
----
-
-## Google Sheets Integration
-
-### Clean URL Generation
-
-The script generates clean URLs directly without using the DoodStream library that returns JSON:
-
-```python
-def get_doodstream_links(file_code):
-    """Get watch and download links - returns clean URLs only"""
-    watch_link = f"https://doodstream.com/d/{file_code}"
-    dl_link = f"https://doodstream.com/download/{file_code}"
-    
-    return {
-        'file_code': file_code,
-        'watch_link': watch_link,
-        'download_link': dl_link
-    }
-```
-
-**Why this approach?**
-- The `dood.get_download_sources()` library method returns JSON objects instead of clean URLs
-- Direct URL construction is more reliable and predictable
-- Google Sheets columns show clean, readable URLs instead of JSON strings
-
-### Sheet Columns
-
-| Column | Header | Example Value |
-|--------|--------|---------------|
-| A | Timestamp | 2026-05-15 00:07:04 |
-| B | Title | مسلسل حكاية نرجس الحلقة 7 السابعة |
-| C | Video ID | 8b828925a |
-| D | Watch Link | https://mp4plus.org/embed-vwh1wabjso5l.html |
-| E | Series Name | مسلسل حكاية نرجس |
-| F | Category | رمضان 2026 - مسلسلات |
-| G | DoodStream Watch | https://doodstream.com/d/99iueh3f2ek4 |
-| H | DoodStream Download | https://doodstream.com/download/99iueh3f2ek4 |
-| I | Status | ✅ Success |
-
----
-
-## Testing
-
-### Test Upload Script
-
-```python
-import requests
-from urllib.parse import quote
-
-API_KEY = "your_api_key_here"
-
-# Test 1: List Folders
-response = requests.get(f"https://doodapi.com/api/list_folders?key={API_KEY}")
-response.raise_for_status()
-print("Folders:", response.json())
-
-# Test 2: Create Folder
-response = requests.get(
-    f"https://doodapi.com/api/folder/create?key={API_KEY}&name={quote('Test Folder')}"
-)
-response.raise_for_status()
-print("Folder Created:", response.json())
-
-# Test 3: Upload File (requires actual file)
-# files = {"file": open("test.mp4", "rb")}
-# response = requests.post(f"https://doodapi.com/api/upload?key={API_KEY}", files=files)
-# print("Upload:", response.json())
-```
 
 ---
 
 ## References
 
 - **Official Documentation**: https://doodstream.com/api-docs
-- **API Base URL**: https://doodapi.com/api
+- **API Base URL**: https://doodapi.co/api  (Updated from doodapi.com)
 - **Support**: Check DoodStream dashboard for API support
 
 ---
 
 **Last Updated**: 2026-05-15  
-**Version**: 2.2
+**Version**: 3.0
+
+### Changelog v3.0 (Latest Update)
+
+- **Fixed API domain**: Changed from `doodapi.com` to `doodapi.co` (correct domain)
+- **Fixed folder list endpoint**: Changed from `/api/list_folders` to `/api/folder/list`
+- **Fixed response parsing**: Updated to handle `{"result": {"folders": [...]}}` structure
+- **Fixed folder create parameter**: Changed from `parent` to `parent_id` (correct API param)
+- **Added strict folder requirement**: Upload now aborts if folder structure cannot be created
+- **Added cleanup logic**: Files are deleted if they cannot be moved to correct folder
+- **Updated documentation**: All examples now use correct endpoints and response formats
 
 ### Changelog v2.2
 
