@@ -26,13 +26,13 @@ This document explains the complete workflow of the video scraper and uploader.
       └─→ Verify file size > 1MB
       └─→ Show single-line progress bar
    
-   c. Upload to DoodStream
-      └─→ Upload to DoodStream root
-      └─→ Rename file with Arabic title
-      └─→ Create Category folder (if not exists)
-      └─→ Create Series folder inside Category
-      └─→ Move video to Series folder
-      └─→ Delete from root
+   c. Upload to DoodStream ⬆️
+      └─→ Upload to DoodStream root via API
+      └─→ Rename file with Arabic title via API
+      └─→ Create Category folder (if not exists) via API
+      └─→ Create Series folder inside Category via API
+      └─→ Move video to Series folder via API
+      └─→ Delete from root (automatic after move)
    
    d. Update Google Sheet
       └─→ Check if row already exists
@@ -83,7 +83,7 @@ This document explains the complete workflow of the video scraper and uploader.
 2. Parse HTML to find all server embed URLs
 3. Extract server names and URLs
 4. For each server:
-   - Load URL with Selenium (or requests fallback)
+   - Load URL with requests (with timeout)
    - Check if video URL is present in response
    - Verify content-type is video (not HTML)
    - Check file size > 1MB
@@ -93,7 +93,7 @@ This document explains the complete workflow of the video scraper and uploader.
 
 **Error Handling**:
 - If server returns HTML instead of video → Try next server
-- If Selenium fails → Use requests fallback
+- If requests fails → Try next server
 - If all servers fail → Mark video as failed in sheet
 
 ---
@@ -132,28 +132,28 @@ This document explains the complete workflow of the video scraper and uploader.
 4. Store filecode for next steps
 
 #### Phase 2: Rename File
-1. Call DoodStream API: `/api/rename`
-2. Parameters: `filecode`, `title` (Arabic title)
+1. Call DoodStream API: `/api/file/rename`
+2. Parameters: `filecode`, `title` (URL-encoded Arabic title)
 3. Wait 1-2 seconds for API to process
 4. Verify rename successful
 
 #### Phase 3: Create Folder Structure
 1. **Get or Create Category Folder**:
-   - Call `/api/folder/create` with category name
-   - If exists, get existing folder code
+   - Call `/api/list_folders` to check if exists
+   - If not exists: Call `/api/folder/create` with category name
    - Store category folder code
 
 2. **Get or Create Series Folder**:
-   - Call `/api/folder/create` with series name, parent=category
-   - If exists, get existing folder code
+   - Call `/api/list_folders` with parent=category to check if exists
+   - If not exists: Call `/api/folder/create` with series name, parent=category
    - Store series folder code
 
 #### Phase 4: Move to Folder
 1. Call `/api/file/move` with:
    - `filecode`: Video file code
-   - `foldercode`: Series folder code
+   - `fld_id`: Series folder code
 2. Verify move successful
-3. Delete from root (automatic after move)
+3. Fallback: If move fails, try clone + delete method
 
 **Output**: DoodStream file code, watch URL, download URL
 
@@ -164,6 +164,13 @@ DoodStream/
     └── مسلسل حكاية نرجس (Series)
         └── مسلسل حكاية نرجس الحلقة 7 السابعة.mp4
 ```
+
+**API Endpoints Used**:
+- `https://doodapi.com/api/upload` - Upload file
+- `https://doodapi.com/api/file/rename` - Rename file  
+- `https://doodapi.com/api/list_folders` - List folders
+- `https://doodapi.com/api/folder/create` - Create folder
+- `https://doodapi.com/api/file/move` - Move file to folder
 
 ---
 
@@ -289,6 +296,8 @@ DoodStream/
 4. **Server testing** - Stops at first working server
 5. **Resume support** - Skips processed videos
 6. **Real-time updates** - See progress live in sheet
+7. **Direct API calls** - More reliable folder operations
+8. **URL encoding** - Proper handling of Arabic titles
 
 ### Best Practices
 
@@ -330,4 +339,4 @@ DoodStream/
 ---
 
 **Last Updated**: 2026-05-14  
-**Version**: 2.0
+**Version**: 2.1
