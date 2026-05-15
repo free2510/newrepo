@@ -23,13 +23,22 @@ API Endpoints Used (per https://doodstream.com/api-docs):
 - File Clone: GET https://doodapi.co/api/file/clone?key={key}&file_code={code}&fld_id={folder_id}
   Response: {"msg": "OK"}
 
-Key Changes (Latest Update):
-1. Fixed API endpoints from doodapi.com to doodapi.co (correct domain)
-2. Updated folder list API to use /api/folder/list instead of /api/list_folders
-3. Updated response parsing to handle {"result": {"folders": [...]}} structure
-4. Changed folder create parameter from 'parent' to 'parent_id' (correct API param)
-5. Added strict folder structure requirement - upload aborts if folders can't be created
-6. Added cleanup logic to delete files if they can't be moved to correct folder
+Key Changes (Latest Update - v4.0):
+1. Added 15-second delays between ALL API requests (per DoodStream API docs requirement)
+2. Fixed API endpoints from doodapi.com to doodapi.co (correct domain)
+3. Updated folder list API to use /api/folder/list instead of /api/list_folders
+4. Updated response parsing to handle {"result": {"folders": [...]}} structure
+5. Changed folder create parameter from 'parent' to 'parent_id' (correct API param)
+6. Added strict folder structure requirement - upload aborts if folders can't be created
+7. Added cleanup logic to delete files if they can't be moved to correct folder
+
+Workflow with Rate Limiting:
+1. Create Category Folder → Wait 15s
+2. Create Series Folder → Wait 15s
+3. Upload Video → Wait 15s
+4. Rename File → Wait 15s
+5. Move to Folder → Wait 15s
+6. Complete
 """
 
 import os
@@ -384,6 +393,8 @@ def get_or_create_folder_structure(series_name):
       Response: {"msg": "OK", "result": {"fld_id": "1234567"}}
     - List: GET https://doodapi.co/api/folder/list?key={key}&fld_id={folder_id}&only_folders=1
       Response: {"msg": "OK", "result": {"folders": [{"name": "...", "code": "...", "fld_id": "..."}], "files": [...]}}
+    
+    IMPORTANT: 15 second delay required between API requests per DoodStream API docs
     """
     
     # Step 1: Find or create Category folder in root
@@ -412,6 +423,9 @@ def get_or_create_folder_structure(series_name):
             create_url = f"https://doodapi.co/api/folder/create?key={DOODSTREAM_API_KEY}&name={requests.utils.quote(CATEGORY_NAME)}"
             result = requests.get(create_url, timeout=15).json()
             
+            # 15 second delay after create request
+            time.sleep(15)
+            
             if result and result.get('msg') == 'OK':
                 res_data = result.get('result', {})
                 if isinstance(res_data, dict):
@@ -422,7 +436,6 @@ def get_or_create_folder_structure(series_name):
             
             if not category_folder_id:
                 # Try to find it in the list anyway
-                time.sleep(1)
                 try:
                     response = requests.get(list_url, timeout=10)
                     response.raise_for_status()
@@ -466,6 +479,9 @@ def get_or_create_folder_structure(series_name):
                 result.raise_for_status()
                 result_json = result.json()
                 
+                # 15 second delay after create request
+                time.sleep(15)
+                
                 print(f"   📋 Create folder response: {result_json}")
                 
                 if result_json and result_json.get('msg') == 'OK':
@@ -478,7 +494,6 @@ def get_or_create_folder_structure(series_name):
                 
                 if not series_folder_id:
                     # Try to find it anyway
-                    time.sleep(1)
                     try:
                         response = requests.get(list_url, timeout=10)
                         response.raise_for_status()
@@ -505,6 +520,7 @@ def upload_to_doodstream(file_path, series_name, video_title):
     
     IMPORTANT: If folder structure cannot be created, DO NOT upload the video.
     The video MUST be placed in the correct folder structure.
+    IMPORTANT: 15 second delay required between API requests per DoodStream API docs
     """
     
     # Step 0: Create/get folder structure FIRST - must succeed before upload
@@ -555,10 +571,17 @@ def upload_to_doodstream(file_path, series_name, video_title):
         
         print(f"✅ Uploaded to root! File code: {file_code}")
         
+        # 15 second delay after upload
+        time.sleep(15)
+        
         # Step 3: Rename file to proper title
         try:
             rename_url = f"https://doodapi.co/api/file/rename?key={DOODSTREAM_API_KEY}&file_code={file_code}&title={requests.utils.quote(clean_title)}"
             rename_resp = requests.get(rename_url, timeout=10).json()
+            
+            # 15 second delay after rename
+            time.sleep(15)
+            
             if rename_resp.get('msg') == 'OK':
                 print(f"✅ Renamed file to: {clean_title}")
             else:
@@ -573,6 +596,9 @@ def upload_to_doodstream(file_path, series_name, video_title):
         move_url = f"https://doodapi.co/api/file/move?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
         move_resp = requests.get(move_url, timeout=15).json()
         
+        # 15 second delay after move
+        time.sleep(15)
+        
         if move_resp.get('msg') == 'OK':
             print(f"✅ Moved to folder successfully")
         else:
@@ -582,9 +608,11 @@ def upload_to_doodstream(file_path, series_name, video_title):
                 copy_url = f"https://doodapi.co/api/file/clone?key={DOODSTREAM_API_KEY}&file_code={file_code}&fld_id={target_folder_id}"
                 copy_resp = requests.get(copy_url, timeout=15).json()
                 
+                # 15 second delay after clone
+                time.sleep(15)
+                
                 if copy_resp.get('msg') == 'OK':
                     print(f"✅ Copied to folder (fallback method)")
-                    time.sleep(2)
                     delete_result = dood.delete_file([file_code])
                     if delete_result and delete_result.get('msg') == 'OK':
                         print(f"✅ Deleted original from root")

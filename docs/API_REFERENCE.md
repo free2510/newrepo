@@ -71,6 +71,7 @@ GET https://doodapi.co/api/folder/list?key=YOUR_API_KEY&fld_id=FOLDER_ID
 - Folder IDs are in `fld_id` field (not `id`)
 - Folder codes are in `code` field (not `foldercode`)
 - Use either `fld_id` or `code` for folder operations
+- **RATE LIMITING**: Must wait 15 seconds after each API request per DoodStream docs
 
 ---
 
@@ -104,6 +105,10 @@ GET https://doodapi.co/api/folder/create?key=YOUR_API_KEY&name=FOLDER_NAME&paren
 **Note**: The response contains `fld_id` directly in the result object.
 
 **Used in Script**: `get_or_create_folder_structure()` - Create category and series folders
+
+**Important Notes**:
+- **RATE LIMITING**: Must wait 15 seconds after calling this endpoint before making another API request
+- When creating a series folder inside a category, always provide `parent_id` parameter
 
 ---
 
@@ -166,6 +171,9 @@ GET https://doodapi.co/api/file/rename?key=YOUR_API_KEY&file_code=FILECODE&title
 
 **Used in Script**: After upload, before moving to folder
 
+**Important Notes**:
+- **RATE LIMITING**: Must wait 15 seconds after calling this endpoint before making another API request
+
 ---
 
 ### 5. Move File to Folder
@@ -194,6 +202,9 @@ GET https://doodapi.co/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id=
 
 **Used in Script**: After rename, move to Category/Series folder
 
+**Important Notes**:
+- **RATE LIMITING**: Must wait 15 seconds after calling this endpoint before making another API request
+
 ---
 
 ## Error Handling
@@ -206,8 +217,10 @@ GET https://doodapi.co/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id=
 | 401 | Invalid API key | Verify API key in dashboard |
 | 403 | Permission denied | Check API access enabled |
 | 404 | Not Found | Wrong endpoint (use doodapi.co not doodapi.com) |
-| 429 | Rate limited | Add delays between requests (1-2 seconds) |
+| 429 | Rate limited | **Add 15-second delays between ALL API requests** (REQUIRED per DoodStream docs) |
 | 500 | Server error | Retry after delay |
+
+**IMPORTANT**: Per DoodStream API documentation, you MUST wait at least 15 seconds between each API request to avoid rate limiting. The script now enforces this with `time.sleep(15)` after every API call.
 
 ---
 
@@ -220,9 +233,21 @@ GET https://doodapi.co/api/file/move?key=YOUR_API_KEY&file_code=FILECODE&fld_id=
 ---
 
 **Last Updated**: 2026-05-15  
-**Version**: 3.0
+**Version**: 4.0
 
-### Changelog v3.0 (Latest Update)
+### Changelog v4.0 (Latest Update - API Rate Limiting)
+
+- **Added 15-second delays between all API requests**: Per DoodStream API documentation requirements, added `time.sleep(15)` after:
+  - Folder creation (category folder)
+  - Folder creation (series folder)
+  - File upload
+  - File rename
+  - File move/clone operations
+- **Updated folder structure workflow**: Now strictly follows the sequence: Create Category → Wait 15s → Create Series → Wait 15s → Upload → Wait 15s → Rename → Wait 15s → Move
+- **Enhanced documentation**: Added rate limiting notes to all function docstrings
+- **Prevents API rate limiting**: Ensures compliance with DoodStream's 15-second delay requirement between requests
+
+### Changelog v3.0 (Previous Update)
 
 - **Fixed API domain**: Changed from `doodapi.com` to `doodapi.co` (correct domain)
 - **Fixed folder list endpoint**: Changed from `/api/list_folders` to `/api/folder/list`
